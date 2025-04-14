@@ -169,39 +169,78 @@ export const MySQLConnectionList: React.FC = () => {
       onOk: async () => {
         let successCount = 0;
         let failCount = 0;
+        setImportLoading(true);
         
-        for (const tableName of selectedRowKeys) {
-          try {
-            const collectionName = `mysql_${tableName}`;
-            await importTable({
-              connectionId: currentConnection,
-              tableName,
-              collectionName,
-            });
-            successCount++;
-          } catch (error) {
-            failCount++;
-            console.error(`导入表 ${tableName} 失败:`, error);
+        try {
+          // 限制并发为3个请求
+          const concurrency = 3;
+          const chunks = [];
+          
+          // 将表名分组为小批次
+          for (let i = 0; i < selectedRowKeys.length; i += concurrency) {
+            chunks.push(selectedRowKeys.slice(i, i + concurrency));
           }
-        }
-        
-        if (successCount > 0) {
-          notification.success({
-            message: t('批量导入完成'),
-            description: t('成功导入 {successCount} 个表，失败 {failCount} 个', { 
-              successCount, failCount 
-            }),
-            duration: 5
-          });
-        } else if (failCount > 0) {
+          
+          // 逐批处理表导入
+          for (const chunk of chunks) {
+            const results = await Promise.allSettled(
+              chunk.map(async (tableName) => {
+                try {
+                  const collectionName = `mysql_${tableName}`;
+                  await importTable({
+                    connectionId: currentConnection,
+                    tableName,
+                    collectionName,
+                  });
+                  return { tableName, success: true };
+                } catch (error) {
+                  console.error(`导入表 ${tableName} 失败:`, error);
+                  return { tableName, success: false, error };
+                }
+              })
+            );
+            
+            // 统计结果
+            results.forEach(result => {
+              if (result.status === 'fulfilled') {
+                if (result.value.success) {
+                  successCount++;
+                } else {
+                  failCount++;
+                }
+              } else {
+                failCount++;
+                console.error(`批量导入出错:`, result.reason);
+              }
+            });
+          }
+          
+          // 显示结果通知
+          if (successCount > 0) {
+            notification.success({
+              message: t('批量导入完成'),
+              description: t('成功导入 {successCount} 个表，失败 {failCount} 个', { 
+                successCount, failCount 
+              }),
+              duration: 5
+            });
+          } else if (failCount > 0) {
+            notification.error({
+              message: t('批量导入失败'),
+              description: t('所有表导入均失败，请检查日志'),
+              duration: 5
+            });
+          }
+        } catch (error) {
           notification.error({
-            message: t('批量导入失败'),
-            description: t('所有表导入均失败，请检查日志'),
+            message: t('批量导入出错'),
+            description: error.message || t('未知错误'),
             duration: 5
           });
+        } finally {
+          setImportLoading(false);
+          setSelectedRowKeys([]);
         }
-        
-        setSelectedRowKeys([]);
       }
     });
   };

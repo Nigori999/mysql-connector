@@ -125,6 +125,18 @@ export default class MySQLConnectorPlugin extends Plugin {
             }
           }
         },
+        getTableSchema: {
+            async handler(ctx, next) {
+              const { connectionId, tableName } = ctx.action.params;
+              try {
+                const schema = await this.mysqlManager.getTableSchema(connectionId, tableName);
+                ctx.body = { success: true, data: schema.columns };
+              } catch (error) {
+                ctx.status = 400;
+                ctx.body = { success: false, message: error.message };
+              }
+            }
+          }
       },
     });
   }

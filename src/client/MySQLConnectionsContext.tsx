@@ -3,12 +3,15 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { useAPIClient } from '@nocobase/client';
 
 interface MySQLConnection {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
-  database: string;
-  username: string;
+    id: string;
+    name: string;
+    host: string;
+    port: number;
+    database: string;
+    username: string;
+    status?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface MySQLConnectionsContextType {

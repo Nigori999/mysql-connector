@@ -20,21 +20,23 @@ export default class MySQLConnectorPlugin extends Plugin {
     this.app.use(MySQLConnectionsProvider);
 
     // 添加路由
-    this.app.router.add('admin.settings.mysql-connections', {
-      path: '/admin/settings/mysql-connections',
-      Component: MySQLConnectionList,
+    this.app.router.add('admin.mysql-connections', {
+        path: '/admin/mysql-connections',
+        Component: MySQLConnectionList,
     });
 
     // 添加设置菜单项
     // NocoBase 1.6.2 可能使用不同的设置注册方式，尝试使用多种方式
     if (typeof this.app.setPluginSettings === 'function') {
       // 如果支持 setPluginSettings 方法，使用字符串图标
-      this.app.setPluginSettings('mysql-connector', {
-        title: '外部 MySQL 连接',
-        icon: 'DatabaseOutlined', // 使用字符串而不是React组件
-        Component: MySQLConnectionList,
-        aclSnippet: 'pm.mysql-connector',
-      });
+      // 然后在设置中保持相同的路径
+        this.app.setPluginSettings('mysql-connector', {
+            title: '外部 MySQL 连接',
+            icon: 'DatabaseOutlined',
+            Component: MySQLConnectionList,
+            aclSnippet: 'pm.mysql-connector',
+            path: '/admin/mysql-connections' // 确保这里与路由路径一致
+        });
     } else {
       // 尝试使用通用的路由和菜单添加方式
       this.app.router.add('admin.settings.mysql-connector', {

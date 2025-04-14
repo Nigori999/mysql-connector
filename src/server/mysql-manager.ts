@@ -12,10 +12,14 @@ interface MySQLConnection {
   port: number;
   username: string;
   password: string;
-  connection?: mysql.Connection;
+  connection?: mysql.Connection | mysql.Pool;  // 支持单个连接或连接池
   createdAt?: Date;
   updatedAt?: Date;
 }
+
+// 使用环境变量保存加密密钥，或者使用NocoBase的配置系统
+const ENCRYPTION_KEY = process.env.MYSQL_ENCRYPTION_KEY || 'your-fallback-key';
+const crypto = require('crypto');
 
 export default class MySQLManager {
   private db: Database;
@@ -74,8 +78,8 @@ export default class MySQLManager {
     });
     
     try {
-      // 创建连接
-      const connection = await mysql.createConnection({
+      // 创建一个临时连接来测试连接参数
+    const connection = await mysql.createConnection({
         host: connectionInfo.host,
         port: connectionInfo.port,
         user: connectionInfo.username,
@@ -89,8 +93,9 @@ export default class MySQLManager {
 
       // 测试连接
       await connection.connect();
-      this.logger.info('[mysql-connector] Connection successful');
-
+      // 测试成功后关闭这个临时连接
+        await connection.end();
+        this.logger.info('[mysql-connector] Connection successful');
       // 生成唯一ID
       const id = uuidv4();
 
@@ -122,11 +127,10 @@ export default class MySQLManager {
         throw new Error(`无法保存连接信息: ${dbError.message}`);
       }
 
-      // 保存到内存
-      this.connections.set(id, {
+      // 保存到内存 (但不保存实际连接对象，只保存连接信息)
+    this.connections.set(id, {
         ...connectionData,
         password: connectionInfo.password, // 内存中保留原始密码用于重连
-        connection,
       });
 
       this.logger.info('[mysql-connector] Connection added to in-memory store', { id });
@@ -162,13 +166,15 @@ export default class MySQLManager {
       this.logger.warn('[mysql-connector] Connection not found', { connectionId });
       throw new Error('找不到指定的连接');
     }
-
+  
     try {
+      // 正确处理连接关闭
       if (connectionInfo.connection) {
-        await connectionInfo.connection.end();
+        // 无论是连接还是连接池，都有 end 方法
+        await (connectionInfo.connection as mysql.Pool | mysql.Connection).end();
         this.logger.info('[mysql-connector] Database connection closed successfully');
       }
-
+  
       // 从数据库中删除
       try {
         const repository = this.db.getRepository('mysql_connections');
@@ -185,7 +191,7 @@ export default class MySQLManager {
         });
         throw new Error(`无法从数据库中删除连接记录: ${dbError.message}`);
       }
-
+  
       // 从内存中移除
       this.connections.delete(connectionId);
       this.logger.info('[mysql-connector] Connection removed from in-memory store');
@@ -225,7 +231,7 @@ export default class MySQLManager {
     }
   }
 
-  async getConnection(connectionId: string) {
+  async getConnection(connectionId: string): Promise<mysql.Pool> {
     this.logger.info('[mysql-connector] Getting connection', { connectionId });
     
     const connectionInfo = this.connections.get(connectionId);
@@ -233,39 +239,51 @@ export default class MySQLManager {
       this.logger.warn('[mysql-connector] Connection not found', { connectionId });
       throw new Error('找不到指定的连接');
     }
-
-    // 如果连接不存在或已断开，则重新连接
+  
+    // 如果连接不存在或已断开，则创建一个连接池
     if (!connectionInfo.connection) {
-      this.logger.info('[mysql-connector] Connection not active, reconnecting...');
+      this.logger.info('[mysql-connector] Connection not active, creating connection pool...');
       try {
-        connectionInfo.connection = await mysql.createConnection({
+        const pool = mysql.createPool({
           host: connectionInfo.host,
           port: connectionInfo.port,
           user: connectionInfo.username,
           password: connectionInfo.password,
           database: connectionInfo.database,
-          connectTimeout: 10000
+          waitForConnections: true,
+          connectionLimit: 10,
+          queueLimit: 0,
+          // 添加超时设置
+          connectTimeout: 10000,
+          // 添加SSL选项
+          ssl: process.env.MYSQL_USE_SSL === 'true' ? {} : undefined
         });
-        await connectionInfo.connection.connect();
-        this.logger.info('[mysql-connector] Reconnection successful');
+        
+        // 测试连接池是否可用
+        const connection = await pool.getConnection();
+        connection.release();
+        
+        connectionInfo.connection = pool;
+        this.logger.info('[mysql-connector] Connection pool created successfully');
       } catch (error) {
-        this.logger.error('[mysql-connector] Reconnection failed', { 
+        this.logger.error('[mysql-connector] Connection pool creation failed', { 
           error: error.message,
           connectionId
         });
-        throw new Error(`重新连接到数据库失败: ${error.message}`);
+        throw new Error(`创建数据库连接池失败: ${error.message}`);
       }
     }
-
-    return connectionInfo.connection;
+  
+    return connectionInfo.connection as mysql.Pool;
   }
 
   async listTables(connectionId: string) {
     this.logger.info('[mysql-connector] Listing tables', { connectionId });
     
     try {
-      const connection = await this.getConnection(connectionId);
-      const [rows] = await connection.execute('SHOW TABLES');
+      const pool = await this.getConnection(connectionId);
+      // 使用连接池执行查询
+      const [rows] = await pool.query('SHOW TABLES');
       
       // 提取表名
       const tables = [];
@@ -292,16 +310,16 @@ export default class MySQLManager {
     });
     
     try {
-      const connection = await this.getConnection(connectionId);
+      const pool = await this.getConnection(connectionId);
       
       // 获取表结构
-      const [columns] = await connection.execute(`DESCRIBE \`${tableName}\``);
+      const [columns] = await pool.query(`DESCRIBE \`${tableName}\``);
       this.logger.debug(`[mysql-connector] Table structure retrieved`, {
         columnsCount: (columns as any[]).length
       });
       
       // 获取索引
-      const [indexes] = await connection.execute(`SHOW INDEX FROM \`${tableName}\``);
+      const [indexes] = await pool.query(`SHOW INDEX FROM \`${tableName}\``);
       this.logger.debug(`[mysql-connector] Table indexes retrieved`, {
         indexesCount: (indexes as any[]).length
       });
@@ -340,20 +358,19 @@ export default class MySQLManager {
         
         // 确定字段类型
         let fieldType = 'string';
-        if (column.Type.includes('int')) {
-          fieldType = 'integer';
-        } else if (column.Type.includes('decimal') || column.Type.includes('float') || column.Type.includes('double')) {
-          fieldType = 'float';
-        } else if (column.Type.includes('text') || column.Type.includes('char')) {
-          fieldType = 'string';
-        } else if (column.Type.includes('date')) {
+        if (column.Type.match(/^int|^bigint|^smallint|^mediumint|^tinyint(?!\(1\))/i)) {
+        fieldType = 'integer';
+        } else if (column.Type.match(/^decimal|^float|^double/i)) {
+        fieldType = 'float';
+        } else if (column.Type.match(/^tinyint\(1\)$/i)) {
+        fieldType = 'boolean';
+        } else if (column.Type.match(/^datetime|^timestamp/i)) {
+            fieldType = 'datetime';
+        }
+        else if (column.Type.includes('date')) {
           fieldType = 'date';
         } else if (column.Type.includes('time')) {
           fieldType = 'time';
-        } else if (column.Type.includes('datetime') || column.Type.includes('timestamp')) {
-          fieldType = 'datetime';
-        } else if (column.Type.includes('boolean') || column.Type.includes('tinyint(1)')) {
-          fieldType = 'boolean';
         } else if (column.Type.includes('json')) {
           fieldType = 'json';
         }
@@ -433,16 +450,21 @@ export default class MySQLManager {
     }
   }
 
-  // 加密密码的方法
   private encryptPassword(password: string): string {
-    // 实际应用中应该使用更安全的加密方式
-    // 这里使用简单的Base64作为示例
-    return Buffer.from(password).toString('base64');
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    let encrypted = cipher.update(password);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
   }
-
-  // 解密密码的方法
+  
   private decryptPassword(encryptedPassword: string): string {
-    // 与加密对应的解密方法
-    return Buffer.from(encryptedPassword, 'base64').toString();
+    const textParts = encryptedPassword.split(':');
+    const iv = Buffer.from(textParts[0], 'hex');
+    const encryptedText = Buffer.from(textParts[1], 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    let decrypted = decipher.update(encryptedText);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString();
   }
 }
