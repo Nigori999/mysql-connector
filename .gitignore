@@ -1,0 +1,4 @@
+node_modules
+dist
+myplugin-plugin-mysql-connector-*.tgz
+.cloudbase
