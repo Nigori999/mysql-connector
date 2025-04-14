@@ -248,7 +248,7 @@ export default class MySQLManager {
           host: connectionInfo.host,
           port: connectionInfo.port,
           user: connectionInfo.username,
-          password: connectionInfo.password,
+          password: this.decryptPassword(connectionInfo.password), // 确保使用解密后的密码
           database: connectionInfo.database,
           waitForConnections: true,
           connectionLimit: 10,

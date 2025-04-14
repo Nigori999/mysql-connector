@@ -69,6 +69,12 @@
       "取消": "Cancel",
       "确定要断开此连接吗？": "Are you sure you want to disconnect?",
       "外部 MySQL 连接": "External MySQL Connections",
-      "数据库表": "Database Tables"
+      "数据库表": "Database Tables",
+      "批量导入表": "Batch Import Tables",
+        "批量导入选中表": "Batch Import Selected Tables",
+        "批量导入完成": "Batch Import Complete",
+        "成功导入 {successCount} 个表，失败 {failCount} 个": "Successfully imported {successCount} tables, {failCount} failed",
+        "批量导入失败": "Batch Import Failed",
+        "批量导入出错": "Error in Batch Import"
     }
   }
