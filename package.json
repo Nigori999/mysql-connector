@@ -14,10 +14,7 @@
         "pack": "npm run build && npm pack"
     },
     "keywords": [
-        "plugin",
-        "mysql",
-        "database",
-        "connector"
+        "MysqlConnector"
     ],
     "repository": {
         "type": "git",
@@ -26,5 +23,14 @@
     "author": {
         "name": "Devin",
         "email": "your.email@example.com"
+    },
+    "dependencies": {
+        "mysql2": "^2.3.3",
+        "uuid": "^8.3.2"
+    },
+    "peerDependencies": {
+        "@nocobase/client": "1.6.x",
+        "@nocobase/database": "1.6.x",
+        "@nocobase/server": "1.6.x"
     }
 }
