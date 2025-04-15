@@ -9,9 +9,14 @@
     "description.zh-CN": "NocoBase插件：连接外部MySQL数据库并将表导入为集合",
     "license": "MIT",
     "scripts": {
-        "build": "npx rimraf dist && tsc",
+        "build": "yarn clean && yarn build:client && yarn build:server && yarn build:main && yarn verify",
+        "build:client": "tsc -p tsconfig.client.json",
+        "build:server": "tsc -p tsconfig.server.json",
+        "build:main": "tsc -p tsconfig.main.json",
+        "clean": "rimraf dist",
         "dev": "tsc -w",
-        "pack": "npm run build && npm pack"
+        "pack": "yarn build && yarn pack",
+        "verify": "node verify-build.js"
     },
     "keywords": [
         "MysqlConnector"
@@ -28,6 +33,7 @@
         "mysql2": "^2.3.3",
         "react": "17.x",
         "react-dom": "17.x",
+        "rimraf": "^3.0.2",
         "typescript": "^5.0.0",
         "uuid": "^8.3.2"
     },

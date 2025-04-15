@@ -1,4 +1,18 @@
+# 原有忽略项
 node_modules
 dist
-nocobase-plugin-mysql-connector-*.tgz
-.cloudbase
+*.log
+*.tgz
+
+# Yarn 相关忽略
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+
+# Yarn 错误日志
+yarn-debug.log*
+yarn-error.log*
