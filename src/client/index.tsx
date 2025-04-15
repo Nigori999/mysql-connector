@@ -20,10 +20,11 @@ export default class MySQLConnectorPlugin extends Plugin {
     this.app.use(MySQLConnectionsProvider);
 
     // 添加路由
-    this.app.router.add('admin.mysql-connections', {
-        path: '/admin/mysql-connections',
+    this.app.pluginSettingsManager?.add('mysql-connector', {
+        title: '外部 MySQL 连接',
+        icon: 'DatabaseOutlined',
         Component: MySQLConnectionList,
-    });
+      });
 
     // 添加设置菜单项
     // NocoBase 1.6.2 可能使用不同的设置注册方式，尝试使用多种方式

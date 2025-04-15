@@ -2,15 +2,15 @@
     "name": "@nocobase/plugin-mysql-connector",
     "version": "1.6.20",
     "main": "dist/server/index.js",
-    "module": "dist/client/index.jsx",
+    "module": "dist/client/index.js",
     "displayName": "mysql-connector",
     "displayName.zh-CN": "MySQL 数据库连接器",
     "description": "connect external MySQL database and import tables as collections",
     "description.zh-CN": "NocoBase插件：连接外部MySQL数据库并将表导入为集合",
     "license": "MIT",
     "scripts": {
-        "build": "npx rimraf dist && npx tsc",
-        "dev": "npx tsc -w",
+        "build": "npx rimraf dist && tsc",
+        "dev": "tsc -w",
         "pack": "npm run build && npm pack"
     },
     "keywords": [
@@ -32,8 +32,16 @@
         "uuid": "^8.3.2"
     },
     "peerDependencies": {
+        "@ant-design/icons": "^4.7.0",
         "@nocobase/client": "1.6.x",
         "@nocobase/database": "1.6.x",
-        "@nocobase/server": "1.6.x"
+        "@nocobase/server": "1.6.x",
+        "antd": "^4.24.0"
+    },
+    "devDependencies": {
+        "@nocobase/client": "^1.6.20",
+        "@nocobase/database": "^1.6.20",
+        "@nocobase/server": "^1.6.20",
+        "@types/node": "^22.14.1"
     }
 }

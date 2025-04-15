@@ -2,7 +2,15 @@
 import { Database } from '@nocobase/database';
 import { v4 as uuidv4 } from 'uuid';
 import mysql from 'mysql2/promise';
-import { Logger } from '@nocobase/logger';
+
+import * as crypto from 'crypto';
+
+interface Logger {
+    info(message: string, ...args: any[]): void;
+    error(message: string, ...args: any[]): void;
+    warn(message: string, ...args: any[]): void;
+    debug(message: string, ...args: any[]): void;
+  }
 
 interface MySQLConnection {
   id: string;
@@ -19,7 +27,7 @@ interface MySQLConnection {
 
 // 使用环境变量保存加密密钥，或者使用NocoBase的配置系统
 const ENCRYPTION_KEY = process.env.MYSQL_ENCRYPTION_KEY || 'your-fallback-key';
-const crypto = require('crypto');
+
 
 export default class MySQLManager {
   private db: Database;
@@ -29,12 +37,13 @@ export default class MySQLManager {
   constructor(db: Database) {
     this.db = db;
     // 使用NocoBase的Logger或回退到console
+    // 使用 NocoBase 的 Database 实例上的 logger，或回退到 console
     this.logger = db.logger || {
         info: console.info,
         error: console.error,
         warn: console.warn,
         debug: console.debug
-      } as any;
+      };
     this.loadSavedConnections().catch(error => {
       this.logger.error('[mysql-connector] Failed to load saved connections', { error });
     });

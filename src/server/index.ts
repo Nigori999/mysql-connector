@@ -55,88 +55,78 @@ export default class MySQLConnectorPlugin extends Plugin {
     // 初始化 MySQL 管理器
     this.mysqlManager = new MySQLManager(this.db);
     
-    // 注册资源和操作
+    // 注册资源和操作 - 使用闭包捕获 mysqlManager 避免 this 上下文问题
+    const mysqlManager = this.mysqlManager;
+    
     this.app.resourcer.define({
       name: 'mysql',
       actions: {
-        connect: {
-          async handler(ctx, next) {
-            const { database, host, port, username, password, name } = ctx.action.params;
-            try {
-              const connection = await this.mysqlManager.connect({
-                database,
-                host,
-                port,
-                username,
-                password,
-                name: name || `${host}:${port}/${database}`
-              });
-              ctx.body = { success: true, message: '连接成功', data: connection };
-            } catch (error) {
-              ctx.status = 400;
-              ctx.body = { success: false, message: error.message };
-            }
+        connect: async (ctx, next) => {
+          const { database, host, port, username, password, name } = ctx.action.params;
+          try {
+            const connection = await mysqlManager.connect({
+              database,
+              host,
+              port,
+              username,
+              password,
+              name: name || `${host}:${port}/${database}`
+            });
+            ctx.body = { success: true, message: '连接成功', data: connection };
+          } catch (error) {
+            ctx.status = 400;
+            ctx.body = { success: false, message: error.message };
           }
         },
-        disconnect: {
-          async handler(ctx, next) {
-            const { connectionId } = ctx.action.params;
-            try {
-              await this.mysqlManager.disconnect(connectionId);
-              ctx.body = { success: true, message: '断开连接成功' };
-            } catch (error) {
-              ctx.status = 400;
-              ctx.body = { success: false, message: error.message };
-            }
+        disconnect: async (ctx, next) => {
+          const { connectionId } = ctx.action.params;
+          try {
+            await mysqlManager.disconnect(connectionId);
+            ctx.body = { success: true, message: '断开连接成功' };
+          } catch (error) {
+            ctx.status = 400;
+            ctx.body = { success: false, message: error.message };
           }
         },
-        listConnections: {
-          async handler(ctx, next) {
-            try {
-              const connections = await this.mysqlManager.listConnections();
-              ctx.body = { success: true, data: connections };
-            } catch (error) {
-              ctx.status = 400;
-              ctx.body = { success: false, message: error.message };
-            }
+        listConnections: async (ctx, next) => {
+          try {
+            const connections = await mysqlManager.listConnections();
+            ctx.body = { success: true, data: connections };
+          } catch (error) {
+            ctx.status = 400;
+            ctx.body = { success: false, message: error.message };
           }
         },
-        listTables: {
-          async handler(ctx, next) {
-            const { connectionId } = ctx.action.params;
-            try {
-              const tables = await this.mysqlManager.listTables(connectionId);
-              ctx.body = { success: true, data: tables };
-            } catch (error) {
-              ctx.status = 400;
-              ctx.body = { success: false, message: error.message };
-            }
+        listTables: async (ctx, next) => {
+          const { connectionId } = ctx.action.params;
+          try {
+            const tables = await mysqlManager.listTables(connectionId);
+            ctx.body = { success: true, data: tables };
+          } catch (error) {
+            ctx.status = 400;
+            ctx.body = { success: false, message: error.message };
           }
         },
-        importTable: {
-          async handler(ctx, next) {
-            const { connectionId, tableName, collectionName } = ctx.action.params;
-            try {
-              const result = await this.mysqlManager.importTable(connectionId, tableName, collectionName);
-              ctx.body = { success: true, message: '表导入成功', data: result };
-            } catch (error) {
-              ctx.status = 400;
-              ctx.body = { success: false, message: error.message };
-            }
+        importTable: async (ctx, next) => {
+          const { connectionId, tableName, collectionName } = ctx.action.params;
+          try {
+            const result = await mysqlManager.importTable(connectionId, tableName, collectionName);
+            ctx.body = { success: true, message: '表导入成功', data: result };
+          } catch (error) {
+            ctx.status = 400;
+            ctx.body = { success: false, message: error.message };
           }
         },
-        getTableSchema: {
-            async handler(ctx, next) {
-              const { connectionId, tableName } = ctx.action.params;
-              try {
-                const schema = await this.mysqlManager.getTableSchema(connectionId, tableName);
-                ctx.body = { success: true, data: schema.columns };
-              } catch (error) {
-                ctx.status = 400;
-                ctx.body = { success: false, message: error.message };
-              }
-            }
+        getTableSchema: async (ctx, next) => {
+          const { connectionId, tableName } = ctx.action.params;
+          try {
+            const schema = await mysqlManager.getTableSchema(connectionId, tableName);
+            ctx.body = { success: true, data: schema.columns };
+          } catch (error) {
+            ctx.status = 400;
+            ctx.body = { success: false, message: error.message };
           }
+        }
       },
     });
   }
