@@ -28,7 +28,6 @@ interface MySQLConnection {
 // 使用环境变量保存加密密钥，或者使用NocoBase的配置系统
 const ENCRYPTION_KEY = process.env.MYSQL_ENCRYPTION_KEY || 'your-fallback-key';
 
-
 export default class MySQLManager {
   private db: Database;
   private connections: Map<string, MySQLConnection> = new Map();

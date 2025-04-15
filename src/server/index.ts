@@ -12,6 +12,64 @@ declare module 'sequelize/types/sequelize' {
   }
 }
 
+// 添加统一错误处理工具函数
+const handleServerError = (ctx, error, defaultMessage = '操作失败') => {
+    // 记录详细错误到日志
+    const logger = ctx.app.logger || console;
+    logger.error(`[mysql-connector] Error:`, {
+      error: error.message,
+      stack: error.stack,
+      endpoint: ctx.request.path,
+      method: ctx.request.method,
+      params: ctx.action.params
+    });
+    
+    // 处理常见的MySQL错误并返回友好信息
+    let statusCode = 400;
+    let message = error.message || defaultMessage;
+    let errorCode = 'UNKNOWN_ERROR';
+    
+    if (error.code) {
+      // 对常见的MySQL错误代码进行处理
+      switch (error.code) {
+        case 'ECONNREFUSED':
+          errorCode = 'CONNECTION_REFUSED';
+          message = '无法连接到MySQL服务器';
+          break;
+        case 'ER_ACCESS_DENIED_ERROR':
+          errorCode = 'ACCESS_DENIED';
+          message = '访问被拒绝: 用户名或密码不正确';
+          break;
+        case 'ER_BAD_DB_ERROR':
+          errorCode = 'DATABASE_NOT_FOUND';
+          message = '数据库不存在';
+          break;
+        case 'ETIMEDOUT':
+          errorCode = 'CONNECTION_TIMEOUT';
+          message = '连接超时: 无法在指定时间内连接到服务器';
+          break;
+        case 'ER_TABLE_EXISTS_ERROR':
+          errorCode = 'TABLE_EXISTS';
+          message = '表已存在';
+          break;
+        case 'ER_DUP_ENTRY':
+          errorCode = 'DUPLICATE_ENTRY';
+          message = '数据重复';
+          break;
+      }
+    }
+    
+    // 设置响应
+    ctx.status = statusCode;
+    ctx.body = { 
+      success: false, 
+      message, 
+      error: {
+        code: errorCode,
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      }
+    };
+  };
 export default class MySQLConnectorPlugin extends Plugin {
   mysqlManager: MySQLManager;
   
@@ -74,8 +132,7 @@ export default class MySQLConnectorPlugin extends Plugin {
             });
             ctx.body = { success: true, message: '连接成功', data: connection };
           } catch (error) {
-            ctx.status = 400;
-            ctx.body = { success: false, message: error.message };
+            handleServerError(ctx, error, '连接失败');
           }
         },
         disconnect: async (ctx, next) => {
@@ -84,8 +141,7 @@ export default class MySQLConnectorPlugin extends Plugin {
             await mysqlManager.disconnect(connectionId);
             ctx.body = { success: true, message: '断开连接成功' };
           } catch (error) {
-            ctx.status = 400;
-            ctx.body = { success: false, message: error.message };
+            handleServerError(ctx, error, '断开连接失败');
           }
         },
         listConnections: async (ctx, next) => {
@@ -93,8 +149,7 @@ export default class MySQLConnectorPlugin extends Plugin {
             const connections = await mysqlManager.listConnections();
             ctx.body = { success: true, data: connections };
           } catch (error) {
-            ctx.status = 400;
-            ctx.body = { success: false, message: error.message };
+            handleServerError(ctx, error, '获取连接列表失败');
           }
         },
         listTables: async (ctx, next) => {
@@ -103,8 +158,7 @@ export default class MySQLConnectorPlugin extends Plugin {
             const tables = await mysqlManager.listTables(connectionId);
             ctx.body = { success: true, data: tables };
           } catch (error) {
-            ctx.status = 400;
-            ctx.body = { success: false, message: error.message };
+            handleServerError(ctx, error, '获取表列表失败');
           }
         },
         importTable: async (ctx, next) => {
@@ -113,8 +167,7 @@ export default class MySQLConnectorPlugin extends Plugin {
             const result = await mysqlManager.importTable(connectionId, tableName, collectionName);
             ctx.body = { success: true, message: '表导入成功', data: result };
           } catch (error) {
-            ctx.status = 400;
-            ctx.body = { success: false, message: error.message };
+            handleServerError(ctx, error, '导入表失败');
           }
         },
         getTableSchema: async (ctx, next) => {
@@ -123,8 +176,7 @@ export default class MySQLConnectorPlugin extends Plugin {
             const schema = await mysqlManager.getTableSchema(connectionId, tableName);
             ctx.body = { success: true, data: schema.columns };
           } catch (error) {
-            ctx.status = 400;
-            ctx.body = { success: false, message: error.message };
+            handleServerError(ctx, error, '获取表结构失败');
           }
         }
       },

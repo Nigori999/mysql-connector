@@ -1,5 +1,5 @@
-// src/client/MySQLConnectionList.tsx
-import React, { useState } from 'react';
+// src/client/MySQLConnectionList.tsx - 使用reducer简化状态管理
+import React, { useState, useReducer } from 'react';
 import { 
   Table, Card, Button, Modal, Form, Input, InputNumber, message, 
   Popconfirm, Space, Spin, Tooltip, Alert, Typography, Badge, Divider,
@@ -12,42 +12,122 @@ import {
 } from '@ant-design/icons';
 import { useMySQLConnections } from './MySQLConnectionsContext';
 import { useTranslation } from 'react-i18next';
+import { handleAPIError, getMySQLConnectionErrorMappings, getTableOperationErrorMappings } from './utils/errorHandlers';
 
 const { Text, Link, Title, Paragraph } = Typography;
+
+// 定义状态类型
+interface ConnectionState {
+  connectModalVisible: boolean;
+  tablesModalVisible: boolean;
+  currentConnection: string | null;
+  tables: string[];
+  tablesLoading: boolean;
+  importLoading: boolean;
+  tableInfoLoading: boolean;
+  tableSearchText: string;
+  formErrors: Record<string, string>;
+  submitting: boolean;
+  selectedRowKeys: string[];
+  connectionDetail: any;
+  detailModalVisible: boolean;
+}
+
+// 定义状态操作类型
+type ConnectionAction = 
+  | { type: 'TOGGLE_CONNECT_MODAL', payload: boolean }
+  | { type: 'TOGGLE_TABLES_MODAL', payload: boolean }
+  | { type: 'SET_CURRENT_CONNECTION', payload: string | null }
+  | { type: 'SET_TABLES', payload: string[] }
+  | { type: 'SET_TABLES_LOADING', payload: boolean }
+  | { type: 'SET_IMPORT_LOADING', payload: boolean }
+  | { type: 'SET_TABLE_INFO_LOADING', payload: boolean }
+  | { type: 'SET_TABLE_SEARCH_TEXT', payload: string }
+  | { type: 'SET_FORM_ERRORS', payload: Record<string, string> }
+  | { type: 'CLEAR_FORM_ERRORS' }
+  | { type: 'SET_SUBMITTING', payload: boolean }
+  | { type: 'SET_SELECTED_ROW_KEYS', payload: string[] }
+  | { type: 'SET_CONNECTION_DETAIL', payload: any }
+  | { type: 'TOGGLE_DETAIL_MODAL', payload: boolean }
+  | { type: 'RESET_TABLE_SELECTION' };
+
+// 初始状态
+const initialState: ConnectionState = {
+  connectModalVisible: false,
+  tablesModalVisible: false,
+  currentConnection: null,
+  tables: [],
+  tablesLoading: false,
+  importLoading: false,
+  tableInfoLoading: false,
+  tableSearchText: '',
+  formErrors: {},
+  submitting: false,
+  selectedRowKeys: [],
+  connectionDetail: null,
+  detailModalVisible: false,
+};
+
+// Reducer函数
+function connectionReducer(state: ConnectionState, action: ConnectionAction): ConnectionState {
+  switch (action.type) {
+    case 'TOGGLE_CONNECT_MODAL':
+      return { ...state, connectModalVisible: action.payload };
+    case 'TOGGLE_TABLES_MODAL':
+      return { ...state, tablesModalVisible: action.payload };
+    case 'SET_CURRENT_CONNECTION':
+      return { ...state, currentConnection: action.payload };
+    case 'SET_TABLES':
+      return { ...state, tables: action.payload };
+    case 'SET_TABLES_LOADING':
+      return { ...state, tablesLoading: action.payload };
+    case 'SET_IMPORT_LOADING':
+      return { ...state, importLoading: action.payload };
+    case 'SET_TABLE_INFO_LOADING':
+      return { ...state, tableInfoLoading: action.payload };
+    case 'SET_TABLE_SEARCH_TEXT':
+      return { ...state, tableSearchText: action.payload };
+    case 'SET_FORM_ERRORS':
+      return { ...state, formErrors: action.payload };
+    case 'CLEAR_FORM_ERRORS':
+      return { ...state, formErrors: {} };
+    case 'SET_SUBMITTING':
+      return { ...state, submitting: action.payload };
+    case 'SET_SELECTED_ROW_KEYS':
+      return { ...state, selectedRowKeys: action.payload };
+    case 'SET_CONNECTION_DETAIL':
+      return { ...state, connectionDetail: action.payload };
+    case 'TOGGLE_DETAIL_MODAL':
+      return { ...state, detailModalVisible: action.payload };
+    case 'RESET_TABLE_SELECTION':
+      return { ...state, selectedRowKeys: [] };
+    default:
+      return state;
+  }
+}
 
 export const MySQLConnectionList: React.FC = () => {
   const { t } = useTranslation('mysql-connector');
   const { connections, loading, refresh, connect, disconnect, listTables, importTable, listTableColumns } = useMySQLConnections();
   
-  const [connectModalVisible, setConnectModalVisible] = useState(false);
-  const [tablesModalVisible, setTablesModalVisible] = useState(false);
-  const [currentConnection, setCurrentConnection] = useState<string | null>(null);
-  const [tables, setTables] = useState<string[]>([]);
-  const [tablesLoading, setTablesLoading] = useState(false);
-  const [importLoading, setImportLoading] = useState(false);
-  const [tableInfoLoading, setTableInfoLoading] = useState(false);
-  const [tableSearchText, setTableSearchText] = useState('');
-  const [formErrors, setFormErrors] = useState<any>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
-  const [connectionDetail, setConnectionDetail] = useState<any>(null);
-  const [detailModalVisible, setDetailModalVisible] = useState(false);
-  
+  // 使用reducer替代多个useState
+  const [state, dispatch] = useReducer(connectionReducer, initialState);
   const [form] = Form.useForm();
 
   // 获取连接详情
   const handleViewConnectionDetail = (connection) => {
-    setConnectionDetail(connection);
-    setDetailModalVisible(true);
+    dispatch({ type: 'SET_CONNECTION_DETAIL', payload: connection });
+    dispatch({ type: 'TOGGLE_DETAIL_MODAL', payload: true });
   };
 
   // 连接到数据库
   const handleConnect = async (values) => {
-    setSubmitting(true);
-    setFormErrors({});
+    dispatch({ type: 'SET_SUBMITTING', payload: true });
+    dispatch({ type: 'CLEAR_FORM_ERRORS' });
+    
     try {
       await connect(values);
-      setConnectModalVisible(false);
+      dispatch({ type: 'TOGGLE_CONNECT_MODAL', payload: false });
       form.resetFields();
       
       notification.success({
@@ -58,30 +138,19 @@ export const MySQLConnectionList: React.FC = () => {
       
       refresh();
     } catch (error) {
-      // 处理特定类型的错误
-      if (error.message.includes('ECONNREFUSED')) {
-        setFormErrors({
-          host: t('无法连接到指定主机'),
-          port: t('无法连接到指定端口')
-        });
-      } else if (error.message.includes('Access denied')) {
-        setFormErrors({
-          username: t('用户名或密码不正确'),
-          password: t('用户名或密码不正确')
-        });
-      } else if (error.message.includes('not exists')) {
-        setFormErrors({
-          database: t('数据库不存在')
-        });
-      } else {
-        notification.error({
-          message: t('连接失败'),
-          description: error.message || t('未知错误'),
-          duration: 5
-        });
+      // 使用优化的错误处理
+    const { formErrors } = handleAPIError(
+        error, 
+        t, 
+        getMySQLConnectionErrorMappings(t),
+        '连接失败'
+      );
+      
+      if (formErrors) {
+        dispatch({ type: 'SET_FORM_ERRORS', payload: formErrors });
       }
     } finally {
-      setSubmitting(false);
+      dispatch({ type: 'SET_SUBMITTING', payload: false });
     }
   };
 
@@ -98,46 +167,38 @@ export const MySQLConnectionList: React.FC = () => {
       
       refresh();
     } catch (error) {
-      notification.error({
-        message: t('断开连接失败'),
-        description: error.message || t('未知错误'),
-        duration: 4
-      });
+        handleAPIError(error, t, [], '断开连接失败');
     }
   };
 
   // 查看表列表
   const handleViewTables = async (id: string) => {
-    setCurrentConnection(id);
-    setTablesLoading(true);
-    setTableSearchText('');
+    dispatch({ type: 'SET_CURRENT_CONNECTION', payload: id });
+    dispatch({ type: 'SET_TABLES_LOADING', payload: true });
+    dispatch({ type: 'SET_TABLE_SEARCH_TEXT', payload: '' });
     
     try {
       const result = await listTables(id);
-      setTables(result.data?.data || []);
-      setTablesModalVisible(true);
+      dispatch({ type: 'SET_TABLES', payload: result.data?.data || [] });
+      dispatch({ type: 'TOGGLE_TABLES_MODAL', payload: true });
     } catch (error) {
-      notification.error({
-        message: t('获取表列表失败'),
-        description: error.message || t('未知错误'),
-        duration: 4
-      });
+        handleAPIError(error, t, [], '获取表列表失败');
     } finally {
-      setTablesLoading(false);
+      dispatch({ type: 'SET_TABLES_LOADING', payload: false });
     }
   };
 
   // 导入表
   const handleImportTable = async (tableName: string) => {
-    if (!currentConnection) return;
+    if (!state.currentConnection) return;
     
-    setImportLoading(true);
+    dispatch({ type: 'SET_IMPORT_LOADING', payload: true });
     try {
       // 使用表名作为默认集合名称
       const collectionName = `mysql_${tableName}`;
       
       await importTable({
-        connectionId: currentConnection,
+        connectionId: state.currentConnection,
         tableName,
         collectionName,
       });
@@ -148,28 +209,29 @@ export const MySQLConnectionList: React.FC = () => {
         icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />
       });
     } catch (error) {
-      notification.error({
-        message: t('导入表失败'),
-        description: error.message || t('未知错误'),
-        duration: 5
-      });
+        handleAPIError(
+            error, 
+            t, 
+            getTableOperationErrorMappings(t), 
+            '导入表失败'
+          );
     } finally {
-      setImportLoading(false);
+      dispatch({ type: 'SET_IMPORT_LOADING', payload: false });
     }
   };
 
   // 批量导入表
   const handleBatchImportTables = async () => {
-    if (!currentConnection || selectedRowKeys.length === 0) return;
+    if (!state.currentConnection || state.selectedRowKeys.length === 0) return;
     
     Modal.confirm({
       title: t('批量导入表'),
-      content: t('确定要导入选中的 {count} 个表吗？', { count: selectedRowKeys.length }),
+      content: t('确定要导入选中的 {count} 个表吗？', { count: state.selectedRowKeys.length }),
       icon: <ExclamationCircleOutlined />,
       onOk: async () => {
         let successCount = 0;
         let failCount = 0;
-        setImportLoading(true);
+        dispatch({ type: 'SET_IMPORT_LOADING', payload: true });
         
         try {
           // 限制并发为3个请求
@@ -177,8 +239,8 @@ export const MySQLConnectionList: React.FC = () => {
           const chunks = [];
           
           // 将表名分组为小批次
-          for (let i = 0; i < selectedRowKeys.length; i += concurrency) {
-            chunks.push(selectedRowKeys.slice(i, i + concurrency));
+          for (let i = 0; i < state.selectedRowKeys.length; i += concurrency) {
+            chunks.push(state.selectedRowKeys.slice(i, i + concurrency));
           }
           
           // 逐批处理表导入
@@ -188,7 +250,7 @@ export const MySQLConnectionList: React.FC = () => {
                 try {
                   const collectionName = `mysql_${tableName}`;
                   await importTable({
-                    connectionId: currentConnection,
+                    connectionId: state.currentConnection as string,
                     tableName,
                     collectionName,
                   });
@@ -238,8 +300,8 @@ export const MySQLConnectionList: React.FC = () => {
             duration: 5
           });
         } finally {
-          setImportLoading(false);
-          setSelectedRowKeys([]);
+          dispatch({ type: 'SET_IMPORT_LOADING', payload: false });
+          dispatch({ type: 'RESET_TABLE_SELECTION' });
         }
       }
     });
@@ -247,10 +309,10 @@ export const MySQLConnectionList: React.FC = () => {
 
   // 查看表结构信息
   const handleViewTableInfo = (tableName) => {
-    if (!currentConnection) return;
-    setTableInfoLoading(true);
+    if (!state.currentConnection) return;
+    dispatch({ type: 'SET_TABLE_INFO_LOADING', payload: true });
     
-    listTableColumns(currentConnection, tableName)
+    listTableColumns(state.currentConnection, tableName)
       .then(columns => {
         Modal.info({
           title: (
@@ -322,13 +384,13 @@ export const MySQLConnectionList: React.FC = () => {
         });
       })
       .finally(() => {
-        setTableInfoLoading(false);
+        dispatch({ type: 'SET_TABLE_INFO_LOADING', payload: false });
       });
   };
 
   // 过滤表名
-  const filteredTables = tables.filter(table => 
-    table.toLowerCase().includes(tableSearchText.toLowerCase())
+  const filteredTables = state.tables.filter(table => 
+    table.toLowerCase().includes(state.tableSearchText.toLowerCase())
   );
 
   // 连接列表表格列定义
@@ -428,7 +490,7 @@ export const MySQLConnectionList: React.FC = () => {
             type="primary" 
             size="small" 
             onClick={() => handleImportTable(name)}
-            loading={importLoading}
+            loading={state.importLoading}
             icon={<ImportOutlined />}
           >
             {t('导入')}
@@ -436,7 +498,7 @@ export const MySQLConnectionList: React.FC = () => {
           <Button
             size="small"
             onClick={() => handleViewTableInfo(name)}
-            loading={tableInfoLoading}
+            loading={state.tableInfoLoading}
             icon={<EyeOutlined />}
           >
             {t('查看结构')}
@@ -486,7 +548,7 @@ export const MySQLConnectionList: React.FC = () => {
             <Button 
               type="primary" 
               icon={<PlusOutlined />} 
-              onClick={() => setConnectModalVisible(true)}
+              onClick={() => dispatch({ type: 'TOGGLE_CONNECT_MODAL', payload: true })}
             >
               {t('新建连接')}
             </Button>
@@ -511,7 +573,7 @@ export const MySQLConnectionList: React.FC = () => {
                 <Button 
                   type="primary" 
                   icon={<PlusOutlined />} 
-                  onClick={() => setConnectModalVisible(true)}
+                  onClick={() => dispatch({ type: 'TOGGLE_CONNECT_MODAL', payload: true })}
                 >
                   {t('新建连接')}
                 </Button>
@@ -529,11 +591,11 @@ export const MySQLConnectionList: React.FC = () => {
             {t('创建 MySQL 连接')}
           </Space>
         }
-        open={connectModalVisible}
+        open={state.connectModalVisible}
         onCancel={() => {
-          if (!submitting) {
-            setConnectModalVisible(false);
-            setFormErrors({});
+          if (!state.submitting) {
+            dispatch({ type: 'TOGGLE_CONNECT_MODAL', payload: false });
+            dispatch({ type: 'CLEAR_FORM_ERRORS' });
             form.resetFields();
           }
         }}
@@ -570,8 +632,8 @@ export const MySQLConnectionList: React.FC = () => {
                 name="name"
                 label={t('连接名称')}
                 rules={[{ required: true }]}
-                validateStatus={formErrors.name ? 'error' : undefined}
-                help={formErrors.name}
+                validateStatus={state.formErrors.name ? 'error' : undefined}
+                help={state.formErrors.name}
               >
                 <Input 
                   placeholder={t('例如: 产品数据库')} 
@@ -593,8 +655,8 @@ export const MySQLConnectionList: React.FC = () => {
                 name="host"
                 label={t('主机地址')}
                 rules={[{ required: true }]}
-                validateStatus={formErrors.host ? 'error' : undefined}
-                help={formErrors.host}
+                validateStatus={state.formErrors.host ? 'error' : undefined}
+                help={state.formErrors.host}
               >
                 <Input 
                   placeholder={t('例如: localhost 或 127.0.0.1')} 
@@ -611,8 +673,8 @@ export const MySQLConnectionList: React.FC = () => {
                   { required: true },
                   { type: 'number', min: 1, max: 65535 }
                 ]}
-                validateStatus={formErrors.port ? 'error' : undefined}
-                help={formErrors.port}
+                validateStatus={state.formErrors.port ? 'error' : undefined}
+                help={state.formErrors.port}
               >
                 <InputNumber style={{ width: '100%' }} min={1} max={65535} />
               </Form.Item>
@@ -623,8 +685,8 @@ export const MySQLConnectionList: React.FC = () => {
             name="database"
             label={t('数据库名称')}
             rules={[{ required: true }]}
-            validateStatus={formErrors.database ? 'error' : undefined}
-            help={formErrors.database || t('要连接的MySQL数据库名称')}
+            validateStatus={state.formErrors.database ? 'error' : undefined}
+            help={state.formErrors.database || t('要连接的MySQL数据库名称')}
           >
             <Input placeholder={t('输入数据库名称')} autoComplete="off" />
           </Form.Item>
@@ -635,8 +697,8 @@ export const MySQLConnectionList: React.FC = () => {
                 name="username"
                 label={t('用户名')}
                 rules={[{ required: true }]}
-                validateStatus={formErrors.username ? 'error' : undefined}
-                help={formErrors.username}
+                validateStatus={state.formErrors.username ? 'error' : undefined}
+                help={state.formErrors.username}
               >
                 <Input 
                   placeholder={t('输入数据库用户名')} 
@@ -649,8 +711,8 @@ export const MySQLConnectionList: React.FC = () => {
                 name="password"
                 label={t('密码')}
                 rules={[{ required: true }]}
-                validateStatus={formErrors.password ? 'error' : undefined}
-                help={formErrors.password}
+                validateStatus={state.formErrors.password ? 'error' : undefined}
+                help={state.formErrors.password}
               >
                 <Input.Password 
                   placeholder={t('输入数据库密码')} 
@@ -666,12 +728,12 @@ export const MySQLConnectionList: React.FC = () => {
                 <Col span={12}>
                   <Button 
                     onClick={() => {
-                      setConnectModalVisible(false);
-                      setFormErrors({});
+                      dispatch({ type: 'TOGGLE_CONNECT_MODAL', payload: false });
+                      dispatch({ type: 'CLEAR_FORM_ERRORS' });
                       form.resetFields();
                     }}
                     block
-                    disabled={submitting}
+                    disabled={state.submitting}
                   >
                     {t('取消')}
                   </Button>
@@ -681,15 +743,15 @@ export const MySQLConnectionList: React.FC = () => {
                     type="primary" 
                     htmlType="submit" 
                     block 
-                    loading={submitting}
-                    disabled={submitting}
+                    loading={state.submitting}
+                    disabled={state.submitting}
                   >
-                    {submitting ? t('连接中...') : t('连接')}
+                    {state.submitting ? t('连接中...') : t('连接')}
                   </Button>
                 </Col>
               </Row>
               
-              {Object.keys(formErrors).length > 0 && (
+              {Object.keys(state.formErrors).length > 0 && (
                 <Alert 
                   message={t('连接失败')} 
                   description={t('请检查输入的信息是否正确')} 
@@ -717,18 +779,18 @@ export const MySQLConnectionList: React.FC = () => {
             {t('数据库表')}
           </Space>
         }
-        open={tablesModalVisible}
+        open={state.tablesModalVisible}
         onCancel={() => {
-          setTablesModalVisible(false);
-          setSelectedRowKeys([]);
+          dispatch({ type: 'TOGGLE_TABLES_MODAL', payload: false });
+          dispatch({ type: 'RESET_TABLE_SELECTION' });
         }}
         width={800}
         footer={[
           <Button 
             key="close" 
             onClick={() => {
-              setTablesModalVisible(false);
-              setSelectedRowKeys([]);
+              dispatch({ type: 'TOGGLE_TABLES_MODAL', payload: false });
+              dispatch({ type: 'RESET_TABLE_SELECTION' });
             }}
           >
             {t('关闭')}
@@ -736,34 +798,34 @@ export const MySQLConnectionList: React.FC = () => {
           <Button 
             key="import" 
             type="primary" 
-            disabled={selectedRowKeys.length === 0}
+            disabled={state.selectedRowKeys.length === 0}
             onClick={handleBatchImportTables}
           >
-            {t('批量导入选中表')} ({selectedRowKeys.length})
+            {t('批量导入选中表')} ({state.selectedRowKeys.length})
           </Button>
         ]}
       >
-        <Spin spinning={tablesLoading}>
+        <Spin spinning={state.tablesLoading}>
           <div style={{ marginBottom: 16 }}>
             <Input
               placeholder={t('搜索表名')}
-              value={tableSearchText}
-              onChange={e => setTableSearchText(e.target.value)}
+              value={state.tableSearchText}
+              onChange={e => dispatch({ type: 'SET_TABLE_SEARCH_TEXT', payload: e.target.value })}
               prefix={<SearchOutlined />}
               allowClear
               style={{ width: 200, marginRight: 8 }}
             />
             <span style={{ marginLeft: 8 }}>
-              {t('共 {count} 个表', { count: tables.length })}
-              {tableSearchText && `, ${t('匹配 {count} 个', { count: filteredTables.length })}`}
+              {t('共 {count} 个表', { count: state.tables.length })}
+              {state.tableSearchText && `, ${t('匹配 {count} 个', { count: filteredTables.length })}`}
             </span>
           </div>
           
-          {tables.length > 0 ? (
+          {state.tables.length > 0 ? (
             <Table 
               rowSelection={{
-                selectedRowKeys,
-                onChange: (keys) => setSelectedRowKeys(keys as string[]),
+                selectedRowKeys: state.selectedRowKeys,
+                onChange: (keys) => dispatch({ type: 'SET_SELECTED_ROW_KEYS', payload: keys as string[] }),
               }}
               columns={tableColumns} 
               dataSource={filteredTables.map(name => ({ name, key: name }))} 
@@ -785,16 +847,15 @@ export const MySQLConnectionList: React.FC = () => {
           )}
         </Spin>
       </Modal>
-
-      {/* 连接详情对话框 */}
-      <Modal
+{/* 连接详情对话框 */}
+<Modal
         title={t('连接详情')}
-        open={detailModalVisible}
-        onCancel={() => setDetailModalVisible(false)}
+        open={state.detailModalVisible}
+        onCancel={() => dispatch({ type: 'TOGGLE_DETAIL_MODAL', payload: false })}
         footer={[
           <Button 
             key="close" 
-            onClick={() => setDetailModalVisible(false)}
+            onClick={() => dispatch({ type: 'TOGGLE_DETAIL_MODAL', payload: false })}
           >
             {t('关闭')}
           </Button>,
@@ -802,9 +863,9 @@ export const MySQLConnectionList: React.FC = () => {
             key="view" 
             type="primary" 
             onClick={() => {
-              setDetailModalVisible(false);
-              if (connectionDetail) {
-                handleViewTables(connectionDetail.id);
+              dispatch({ type: 'TOGGLE_DETAIL_MODAL', payload: false });
+              if (state.connectionDetail) {
+                handleViewTables(state.connectionDetail.id);
               }
             }}
           >
@@ -812,22 +873,22 @@ export const MySQLConnectionList: React.FC = () => {
           </Button>
         ]}
       >
-        {connectionDetail && (
+        {state.connectionDetail && (
           <Descriptions bordered column={1}>
-            <Descriptions.Item label={t('连接名称')}>{connectionDetail.name}</Descriptions.Item>
-            <Descriptions.Item label={t('主机')}>{connectionDetail.host}</Descriptions.Item>
-            <Descriptions.Item label={t('端口')}>{connectionDetail.port}</Descriptions.Item>
-            <Descriptions.Item label={t('数据库')}>{connectionDetail.database}</Descriptions.Item>
-            <Descriptions.Item label={t('用户名')}>{connectionDetail.username}</Descriptions.Item>
+            <Descriptions.Item label={t('连接名称')}>{state.connectionDetail.name}</Descriptions.Item>
+            <Descriptions.Item label={t('主机')}>{state.connectionDetail.host}</Descriptions.Item>
+            <Descriptions.Item label={t('端口')}>{state.connectionDetail.port}</Descriptions.Item>
+            <Descriptions.Item label={t('数据库')}>{state.connectionDetail.database}</Descriptions.Item>
+            <Descriptions.Item label={t('用户名')}>{state.connectionDetail.username}</Descriptions.Item>
             <Descriptions.Item label={t('状态')}>
               <Badge 
-                status={connectionDetail.status === 'connected' ? 'success' : 'default'} 
-                text={connectionDetail.status === 'connected' ? t('已连接') : t('已断开')} 
+                status={state.connectionDetail.status === 'connected' ? 'success' : 'default'} 
+                text={state.connectionDetail.status === 'connected' ? t('已连接') : t('已断开')} 
               />
             </Descriptions.Item>
-            {connectionDetail.createdAt && (
+            {state.connectionDetail.createdAt && (
               <Descriptions.Item label={t('创建时间')}>
-                {new Date(connectionDetail.createdAt).toLocaleString()}
+                {new Date(state.connectionDetail.createdAt).toLocaleString()}
               </Descriptions.Item>
             )}
           </Descriptions>
@@ -838,3 +899,4 @@ export const MySQLConnectionList: React.FC = () => {
 };
 
 export default MySQLConnectionList;
+      
