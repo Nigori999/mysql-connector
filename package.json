@@ -11,26 +11,7 @@
     "scripts": {
         "build": "npx rimraf dist && npx tsc",
         "dev": "npx tsc -w",
-        "clean": "npx rimraf dist",
         "pack": "npm run build && npm pack"
-    },
-    
-    "devDependencies": {
-        "@nocobase/client": "1.6.x",
-        "@nocobase/database": "1.6.x",
-        "@nocobase/server": "1.6.x",
-        "antd": "5.x",
-        "react": "18.x",
-        "react-dom": "18.x"
-    },
-    "dependencies": {
-    "mysql2": "^2.3.3",
-    "uuid": "^8.3.2"
-    },
-    "peerDependencies": {
-        "@nocobase/client": "1.6.x",
-        "@nocobase/database": "1.6.x",
-        "@nocobase/server": "1.6.x"
     },
     "keywords": [
         "plugin",
@@ -45,8 +26,5 @@
     "author": {
         "name": "Devin",
         "email": "your.email@example.com"
-    },
-    "engines": {
-        "node": ">=14.0.0"
     }
 }
