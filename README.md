@@ -19,7 +19,7 @@ NocoBase MySQL 连接器是一个功能强大的插件，允许您连接外部 M
 - 具有插件管理权限的管理员账户
 - 外部 MySQL 数据库的访问凭据（主机地址、端口、数据库名、用户名和密码）
 
-### 安装步骤
+### 安装方式一：从 NPM 安装
 
 1. 登录到 NocoBase 管理员控制台
 2. 进入"插件管理"页面
@@ -27,6 +27,35 @@ NocoBase MySQL 连接器是一个功能强大的插件，允许您连接外部 M
 4. 选择"从 NPM 安装"，输入包名：`@nocobase/plugin-mysql-connector`
 5. 点击"安装"按钮
 6. 安装完成后，启用插件
+
+### 安装方式二：通过上传方式安装
+
+#### 步骤一：构建插件包
+
+1. 克隆插件仓库或下载源代码：
+   ```bash
+   git clone https://github.com/Nigori999/nocobase-plugin-mysql-connector.git
+   cd nocobase-plugin-mysql-connector
+   ```
+
+2. 安装依赖并构建插件：
+   ```bash
+   npm install
+   npm run build
+   npm pack
+   ```
+   这将创建一个形如 `nocobase-plugin-mysql-connector-1.6.20.tgz` 的压缩包文件。
+
+#### 步骤二：上传插件到 NocoBase
+
+1. 登录到您的 NocoBase 管理控制台
+2. 导航到"设置" > "插件管理"
+3. 点击"添加插件"按钮
+4. 选择"上传插件"选项
+5. 点击"选择文件"按钮，选择您之前构建的 `.tgz` 文件
+6. 点击"上传"按钮
+7. 上传成功后，点击"安装"
+8. 安装完成后，启用插件
 
 ## 使用说明
 
