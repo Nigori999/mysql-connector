@@ -1,5 +1,5 @@
 {
-    "name": "@myplugin/plugin-mysql-connector",
+    "name": "@nocobase/plugin-mysql-connector",
     "version": "0.1.0",
     "main": "dist/server/index.js",
     "module": "dist/client/index.jsx",
@@ -8,17 +8,33 @@
   "description": "connect external MySQL database and import tables as collections",
   "description.zh-CN": "NocoBase插件：连接外部MySQL数据库并将表导入为集合",
     "license": "MIT",
-    "dependencies": {
+  "dependencies": {
     "mysql2": "^2.3.3",
     "uuid": "^8.3.2"
   },
+  "scripts": {
+    "build": "npx rimraf dist && npx tsc",
+    "dev": "npx tsc -w",
+    "clean": "npx rimraf dist",
+    "pack": "npm run build && npm pack"
+  },
+  "devDependencies": {
+      "@nocobase/client": "1.6.2",
+      "@nocobase/server": "1.6.2",
+      "@nocobase/database": "1.6.2",
+      "react": "^18.2.0",
+      "react-dom": "^18.2.0",
+      "antd": "^5.0.0",
+      "typescript": "^4.9.5",
+      "rimraf": "^3.0.2"
+    },
     "peerDependencies": {
-      "@nocobase/client": "1.6.x",
-        "@nocobase/server": "1.6.x", 
-        "@nocobase/database": "1.6.x",
-        "react": ">=18.2.0",
-        "react-dom": ">=18.2.0",
-        "antd": ">=5.0.0"
+      "@nocobase/client": ">=1.6.0",
+      "@nocobase/server": ">=1.6.0",
+      "@nocobase/database": ">=1.6.0",
+      "react": ">=18.2.0",
+      "react-dom": ">=18.2.0",
+      "antd": ">=5.0.0"
     },
     "keywords": [
       "plugin",

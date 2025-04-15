@@ -270,16 +270,16 @@ export const MySQLConnectionList: React.FC = () => {
               <Table 
                 dataSource={columns.map((col, idx) => ({ ...col, key: idx }))}
                 columns={[
-                  { title: t('字段名'), dataIndex: 'Field', key: 'field', width: 150 },
+                  { title: t('字段名') as string, dataIndex: 'Field', key: 'field', width: 150 },
                   { 
-                    title: t('类型'), 
+                    title: t('类型') as string, 
                     dataIndex: 'Type', 
                     key: 'type',
                     width: 150,
                     render: type => <Tag color="blue">{type}</Tag>
                   },
                   { 
-                    title: t('允许为空'), 
+                    title: t('允许为空') as string, 
                     dataIndex: 'Null', 
                     key: 'null',
                     width: 100,
@@ -288,7 +288,7 @@ export const MySQLConnectionList: React.FC = () => {
                       : <Badge status="error" text={t('否')} />
                   },
                   { 
-                    title: t('键'), 
+                    title: t('键') as string, 
                     dataIndex: 'Key', 
                     key: 'key',
                     width: 100,
@@ -300,7 +300,7 @@ export const MySQLConnectionList: React.FC = () => {
                     }
                   },
                   { 
-                    title: t('默认值'), 
+                    title: t('默认值') as string, 
                     dataIndex: 'Default', 
                     key: 'default',
                     render: value => value === null ? <Text type="secondary">NULL</Text> : value
@@ -334,7 +334,7 @@ export const MySQLConnectionList: React.FC = () => {
   // 连接列表表格列定义
   const columns = [
     {
-      title: t('连接名称'),
+      title: t('连接名称') as string,
       dataIndex: 'name',
       key: 'name',
       render: (text, record) => (
@@ -347,7 +347,7 @@ export const MySQLConnectionList: React.FC = () => {
       )
     },
     {
-      title: t('主机'),
+      title: t('主机') as string,
       dataIndex: 'host',
       key: 'host',
     },
@@ -415,12 +415,12 @@ export const MySQLConnectionList: React.FC = () => {
   // 表格列定义
   const tableColumns = [
     {
-      title: t('表名'),
+      title: t('表名') as string,
       dataIndex: 'name',
       key: 'name',
     },
     {
-      title: t('操作'),
+      title: t('操作') as string,
       key: 'action',
       render: (_, { name }) => (
         <Space>
