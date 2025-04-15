@@ -33,9 +33,9 @@
     },
     "peerDependencies": {
         "@ant-design/icons": "^4.7.0",
-        "@nocobase/client": "1.6.x",
-        "@nocobase/database": "1.6.x",
-        "@nocobase/server": "1.6.x",
+        "@nocobase/client": "1.6.20",
+        "@nocobase/database": "1.6.20",
+        "@nocobase/server": "1.6.20",
         "antd": "^4.24.0"
     },
     "devDependencies": {

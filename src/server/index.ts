@@ -51,7 +51,7 @@ export default class MySQLConnectorPlugin extends Plugin {
     }
   }
 
-  async load() {
+  async load() {  
     // 初始化 MySQL 管理器
     this.mysqlManager = new MySQLManager(this.db);
     
