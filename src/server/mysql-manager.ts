@@ -59,6 +59,11 @@ export default class MySQLManager {
     if (this.isShuttingDown) {
       throw new Error('系统正在关闭，无法获取表结构');
     }
+
+    // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    throw new Error('NocoBase 数据库连接不可用，无法获取表结构');
+  }
     
     const cacheKey = `${connectionId}:${tableName}`;
     const cachedSchema = this.tableSchemaCache.get(cacheKey);
@@ -142,15 +147,8 @@ export default class MySQLManager {
       }
       
       // 确保数据库连接可用
-      if (!this.db || !this.db.sequelize) {
-        this.logger.warn('[mysql-connector] Database not available, skipping connection loading');
-        return;
-      }
-
-      // 检查sequelize连接状态
-      if ((this.db.sequelize.connectionManager as any)?.pool?.pool?.state === 'closing' || 
-      (this.db.sequelize.connectionManager as any)?.pool?.pool?.state === 'closed') {
-        this.logger.warn('[mysql-connector] Database connection pool is closing or closed, skipping connection loading');
+      if (!this.isDbConnectionActive()) {
+        this.logger.warn('[mysql-connector] Database connection is not active, skipping connection loading');
         return;
       }
       
@@ -212,6 +210,11 @@ export default class MySQLManager {
     if (this.isShuttingDown) {
       throw new Error('系统正在关闭，无法创建新连接');
     }
+
+    // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    throw new Error('NocoBase 数据库连接不可用，无法保存连接信息');
+  }
     
     this.logger.info('[mysql-connector] Attempting to connect to database', {
       host: connectionInfo.host,
@@ -411,6 +414,11 @@ export default class MySQLManager {
     if (this.isShuttingDown) {
       throw new Error('系统正在关闭，无法获取数据库连接');
     }
+
+    // 检查数据库连接状态
+    if (!this.isDbConnectionActive()) {
+        throw new Error('NocoBase 数据库连接不可用，无法获取连接信息');
+    }
     
     this.logger.info('[mysql-connector] Getting connection', { connectionId });
     
@@ -483,6 +491,11 @@ export default class MySQLManager {
       throw new Error('系统正在关闭，无法获取表列表');
     }
     
+    // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    throw new Error('NocoBase 数据库连接不可用，无法获取表列表');
+  }
+
     this.logger.info('[mysql-connector] Listing tables', { connectionId });
     
     try {
@@ -525,6 +538,11 @@ export default class MySQLManager {
     if (this.isShuttingDown) {
       throw new Error('系统正在关闭，无法导入表');
     }
+
+    // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    throw new Error('NocoBase 数据库连接不可用，无法导入表');
+  }
     
     this.logger.info('[mysql-connector] Importing table', { 
       connectionId, 
@@ -647,6 +665,11 @@ export default class MySQLManager {
     if (this.isShuttingDown) {
       throw new Error('系统正在关闭，无法批量导入表');
     }
+
+    // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    throw new Error('NocoBase 数据库连接不可用，无法批量导入表');
+  }
     
     this.logger.info('[mysql-connector] Batch importing tables', { 
       connectionId, 
@@ -668,6 +691,11 @@ export default class MySQLManager {
         this.logger.warn('[mysql-connector] System is shutting down, stopping batch import');
         break;
       }
+
+      // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    throw new Error('NocoBase 数据库连接不可用，停止批量导入表');
+  }
       
       const batch = tableNames.slice(i, i + CONCURRENCY);
       const batchPromises = batch.map(async (tableName) => {
@@ -795,6 +823,11 @@ export default class MySQLManager {
     if (this.isShuttingDown) {
       throw new Error('系统正在关闭，无法预览表数据');
     }
+
+    // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    throw new Error('NocoBase 数据库连接不可用，无法预览表数据');
+  }
     
     this.logger.info('[mysql-connector] Getting table data preview', { 
       connectionId, tableName, limit 
@@ -836,6 +869,12 @@ export default class MySQLManager {
         clearInterval(intervalId);
         return;
       }
+
+      // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    clearInterval(intervalId);
+        return;
+  }
       
       this.cleanupIdleConnections();
     }, CLEANUP_INTERVAL);
@@ -853,6 +892,11 @@ export default class MySQLManager {
     if (this.isShuttingDown) {
       return;
     }
+
+    // 检查数据库连接状态
+  if (!this.isDbConnectionActive()) {
+    return;
+  }
     
     const now = Date.now();
     const IDLE_TIMEOUT = 60 * 60 * 1000; // 1小时不活动则关闭
@@ -870,6 +914,38 @@ export default class MySQLManager {
           }
         }
       }
+    }
+  }
+
+  public isDbConnectionActive(): boolean {
+    if (!this.db || !this.db.sequelize) {
+      return false;
+    }
+    
+    try {
+      // 尝试检查连接管理器状态
+      const connManager = this.db.sequelize.connectionManager as any;
+      
+      // 任何以下情况表示连接不可用
+      if (!connManager || 
+          connManager.pool?.draining || 
+          connManager.pool?.pool?.state === 'closing' || 
+          connManager.pool?.pool?.state === 'closed') {
+        return false;
+      }
+      
+      const dialect = (this.db.sequelize as any).options?.dialect;
+      // 如果是 SQLite，检查连接是否已关闭
+      if (dialect === 'sqlite' && 
+        connManager.connections?.default?.[0]?.closed) {
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      // 如果检查过程中出现任何错误，假设连接不可用
+      this.logger.warn('[mysql-connector] Error checking DB connection status:', error.message);
+      return false;
     }
   }
 }

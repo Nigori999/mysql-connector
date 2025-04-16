@@ -249,11 +249,19 @@ export default class MySQLConnectorPlugin extends Plugin {
 
   // 主加载方法
   async load() {  
-    this.app.logger.info('[mysql-connector] Loading plugin');
+    this.app.logger.info('[mysql-connector] 插件加载中...');
     
+    try{
     // 初始化 MySQL 管理器
     this.mysqlManager = new MySQLManager(this.db);
-    await this.mysqlManager.initialize();
+
+    // 添加错误处理
+    try {
+        await this.mysqlManager.initialize();
+      } catch (initError) {
+        this.app.logger.error('[mysql-connector] MySQL manager初始化失败:', initError);
+        // 即使初始化失败，也继续注册资源，只是可能部分功能不可用
+      }
     
     // 确保只注册一次资源
     if (!this.pluginResourceRegistered) {
@@ -261,7 +269,11 @@ export default class MySQLConnectorPlugin extends Plugin {
       this.pluginResourceRegistered = true;
     }
     
-    this.app.logger.info('[mysql-connector] Plugin loaded successfully');
+    this.app.logger.info('[mysql-connector] 插件加载完成');
+} catch (error) {
+    this.app.logger.error('[mysql-connector] 插件加载失败:', error);
+    // 即使加载出错，也不抛出异常，避免影响整个应用
+  }
   }
   
   // 注册API资源和操作
@@ -274,6 +286,17 @@ export default class MySQLConnectorPlugin extends Plugin {
     this.app.resourcer.define({
       name: 'mysql',
       actions: {
+        // 添加一个健康检查接口
+    health: async (ctx) => {
+        const isShutdown = isShuttingDown();
+        const dbActive = this.mysqlManager ? this.mysqlManager.isDbConnectionActive() : false;
+        
+        ctx.body = {
+          success: true,
+          status: isShutdown ? 'shutting_down' : (dbActive ? 'healthy' : 'db_inactive'),
+          message: isShutdown ? '系统正在关闭' : (dbActive ? '系统正常' : 'NocoBase 数据库连接不可用')
+        };
+      },
         connect: async (ctx, next) => {
           if (isShuttingDown()) {
             ctx.status = 503;
