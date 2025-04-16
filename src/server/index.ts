@@ -14,64 +14,58 @@ declare module 'sequelize/types/sequelize' {
 
 // 添加统一错误处理工具函数
 const handleServerError = (ctx, error, defaultMessage = '操作失败') => {
+    // 当前时间戳
+    const timestamp = new Date().toISOString();
+    const errorId = Math.random().toString(36).substring(2, 10); // 生成简单的错误ID
+    
     // 记录详细错误到日志
     const logger = ctx.app.logger || console;
-    logger.error(`[mysql-connector] Error:`, {
-      error: error.message,
-      stack: error.stack,
-      endpoint: ctx.request.path,
-      method: ctx.request.method,
-      params: ctx.action?.params
-    });
     
-    // 处理常见的MySQL错误并返回友好信息
-    let statusCode = 400;
-    let message = error.message || defaultMessage;
-    let errorCode = 'UNKNOWN_ERROR';
-    
-    if (error.code) {
-      // 对常见的MySQL错误代码进行处理
-      switch (error.code) {
-        case 'ECONNREFUSED':
-          errorCode = 'CONNECTION_REFUSED';
-          message = '无法连接到MySQL服务器';
-          break;
-        case 'ER_ACCESS_DENIED_ERROR':
-          errorCode = 'ACCESS_DENIED';
-          message = '访问被拒绝: 用户名或密码不正确';
-          break;
-        case 'ER_BAD_DB_ERROR':
-          errorCode = 'DATABASE_NOT_FOUND';
-          message = '数据库不存在';
-          break;
-        case 'ETIMEDOUT':
-          errorCode = 'CONNECTION_TIMEOUT';
-          message = '连接超时: 无法在指定时间内连接到服务器';
-          break;
-        case 'ER_TABLE_EXISTS_ERROR':
-          errorCode = 'TABLE_EXISTS';
-          message = '表已存在';
-          break;
-        case 'ER_DUP_ENTRY':
-          errorCode = 'DUPLICATE_ENTRY';
-          message = '数据重复';
-          break;
-      }
+    // 避免使用.closed属性
+    let connectionState = 'UNKNOWN';
+    if (ctx.app?.db?.sequelize) {
+      connectionState = 'AVAILABLE';
+    } else {
+      connectionState = 'UNAVAILABLE';
     }
     
+    logger.error(`[mysql-connector] [${errorId}] Error at ${timestamp}:`, {
+      error: error.message,
+      stack: error.stack,
+      endpoint: ctx.request?.path,
+      method: ctx.request?.method,
+      params: ctx.action?.params,
+      connectionState
+    });
+    
     // 设置响应
-    ctx.status = statusCode;
+    ctx.status = 400;
     ctx.body = { 
       success: false, 
-      message, 
+      message: `${defaultMessage} (Ref: ${errorId})`, 
       error: {
-        code: errorCode,
+        message: error.message,
+        code: error.code || 'UNKNOWN_ERROR',
+        timestamp,
+        reference: errorId,
         details: process.env.NODE_ENV === 'development' ? error.stack : undefined
       }
     };
   };
 export default class MySQLConnectorPlugin extends Plugin {
   mysqlManager: MySQLManager;
+  private initialized: boolean = false;
+
+  async closeAllConnections() {
+    if (this.mysqlManager) {
+      try {
+        this.app.logger.info('[mysql-connector] Closing all connections before plugin shutdown');
+        await this.mysqlManager.closeAllConnections();
+      } catch (error) {
+        this.app.logger.error('[mysql-connector] Error closing connections:', error);
+      }
+    }
+  }
   
   // 添加初始化安装方法
   async install(options?: InstallOptions) {
@@ -81,38 +75,53 @@ export default class MySQLConnectorPlugin extends Plugin {
     });
   }
 
+  async afterAdd() {
+    // 添加插件时初始化，但不加载连接
+    await this.db.import({
+      directory: resolve(__dirname, 'collections'),
+    });
+  }
+
+  async beforeRemove() {
+    // 在移除插件前关闭所有连接
+    await this.closeAllConnections();
+  }
+
   // 在卸载时清理
   async remove() {
     // 先关闭所有MySQL连接
-    if (this.mysqlManager) {
-      await this.mysqlManager.closeAllConnections();
-    }
+    await this.closeAllConnections();
     
-    // 使用更安全的方式处理日志设置
-    const sequelize = this.db.sequelize;
-    let originalLogging = false;
+    // 标记插件已卸载，防止后续操作
+    this.mysqlManager = null;
     
     try {
-      // 临时存储并关闭日志
-      if (sequelize && typeof sequelize['options'] === 'object') {
-        originalLogging = sequelize.options?.logging;
-        sequelize.options = sequelize.options || {};
-        sequelize.options.logging = false;
-      }
-      
-      // 删除表
-      const collection = this.db.getCollection('mysql_connections');
-      if (collection && collection.model) {
-        await collection.model.drop();
+      // 检查数据库实例是否可用
+    if (this.db && this.db.sequelize) {
+        // 使用更安全的方式检查连接状态
+        try {
+          const collection = this.db.getCollection('mysql_connections');
+          if (collection && collection.model) {
+            await collection.model.drop();
+            this.app.logger.info('[mysql-connector] Dropped mysql_connections table');
+          }
+        } catch (err) {
+          // 如果操作失败，可能是因为连接已关闭
+          this.app.logger.warn('[mysql-connector] Could not drop tables, database might be closed:', err.message);
+        }
       }
     } catch (error) {
-      console.error('删除表失败:', error);
-    } finally {
-      // 恢复日志设置
-      if (sequelize && typeof sequelize['options'] === 'object') {
-        sequelize.options.logging = originalLogging;
-      }
+      this.app.logger.error('[mysql-connector] Error removing plugin tables:', error);
     }
+  }
+
+  async beforeLoad() {
+    // 在真正加载插件前进行准备
+    if (this.initialized) {
+      // 防止多次初始化
+      return;
+    }
+    this.initialized = true;
   }
 
   async load() {  
@@ -128,6 +137,15 @@ export default class MySQLConnectorPlugin extends Plugin {
         await this.mysqlManager.closeAllConnections();
       }
     });
+
+    // 添加其他必要的生命周期钩子
+    process.on('SIGINT', async () => {
+        await this.closeAllConnections();
+      });
+
+      process.on('SIGTERM', async () => {
+        await this.closeAllConnections();
+      });
     
     this.app.resourcer.define({
       name: 'mysql',

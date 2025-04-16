@@ -52,29 +52,42 @@ export default class MySQLManager {
   private async loadSavedConnections() {
     try {
       this.logger.info('[mysql-connector] Loading saved connections');
-      const repository = this.db.getRepository('mysql_connections');
-      const savedConnections = await repository.find();
       
-      this.logger.info(`[mysql-connector] Found ${savedConnections.length} saved connections`);
+      // 使用更安全的方法检查数据库连接
+      if (!this.db || !this.db.sequelize) {
+        this.logger.warn('[mysql-connector] Database not available, skipping connection loading');
+        return;
+      }
       
-      for (const conn of savedConnections) {
-        // 不立即连接，只在需要时连接
-        this.connections.set(conn.id, {
-          id: conn.id,
-          name: conn.name,
-          database: conn.database,
-          host: conn.host,
-          port: conn.port,
-          username: conn.username,
-          password: conn.password,
-        });
+      // 使用简单的查询测试连接
+      try {
+        const repository = this.db.getRepository('mysql_connections');
+        const savedConnections = await repository.find();
+        
+        this.logger.info(`[mysql-connector] Found ${savedConnections.length} saved connections`);
+        
+        for (const conn of savedConnections) {
+          // 不立即连接，只在需要时连接
+          this.connections.set(conn.id, {
+            id: conn.id,
+            name: conn.name,
+            database: conn.database,
+            host: conn.host,
+            port: conn.port,
+            username: conn.username,
+            password: conn.password,
+          });
+        }
+      } catch (dbError) {
+        // 如果查询失败，可能是因为数据库连接已关闭
+        this.logger.error('[mysql-connector] Could not load connections, database might be closed:', dbError.message);
+        return;
       }
     } catch (error) {
       this.logger.error('[mysql-connector] Error loading saved connections', { 
         error: error.message,
         stack: error.stack
       });
-      // 不抛出异常，允许插件继续加载
     }
   }
 
@@ -177,11 +190,11 @@ export default class MySQLManager {
     }
   
     try {
-      // 正确处理连接关闭
+      // 关闭连接
       if (connectionInfo.connection) {
-        // 无论是连接还是连接池，都有 end 方法
-        await (connectionInfo.connection as mysql.Pool | mysql.Connection).end();
-        this.logger.info('[mysql-connector] Database connection closed successfully');
+        await (connectionInfo.connection as mysql.Pool).end();
+        // 立即删除连接引用防止泄漏
+        connectionInfo.connection = undefined;
       }
   
       // 从数据库中删除
@@ -198,7 +211,6 @@ export default class MySQLManager {
           error: dbError.message,
           connectionId
         });
-        throw new Error(`无法从数据库中删除连接记录: ${dbError.message}`);
       }
   
       // 从内存中移除
@@ -212,6 +224,14 @@ export default class MySQLManager {
         stack: error.stack,
         connectionId
       });
+      
+      // 即使出错，也尝试清理连接
+      try {
+        this.connections.delete(connectionId);
+      } catch (cleanupError) {
+        this.logger.error('[mysql-connector] Failed to cleanup connection', cleanupError);
+      }
+      
       throw new Error(`断开连接时发生错误: ${error.message}`);
     }
   }
@@ -503,31 +523,45 @@ export default class MySQLManager {
   async closeAllConnections() {
     this.logger.info('[mysql-connector] Closing all active connections');
     
-    // 逐个关闭所有活跃连接
+    // 创建所有连接关闭操作的Promise
     const closePromises = [];
+    
+    // 逐个关闭连接并从map中移除
     for (const [connectionId, connectionInfo] of this.connections.entries()) {
       if (connectionInfo.connection) {
+        this.logger.debug(`[mysql-connector] Closing connection ${connectionId}`);
+        
         try {
-          this.logger.debug(`[mysql-connector] Closing connection: ${connectionId}`);
-          const closePromise = (connectionInfo.connection as mysql.Pool | mysql.Connection).end()
-            .catch(err => {
+          const pool = connectionInfo.connection as mysql.Pool;
+          
+          // 使用Promise.race防止无限等待
+          const closePromise = Promise.race([
+            pool.end().catch(err => {
               this.logger.error(`[mysql-connector] Error closing connection ${connectionId}:`, err);
-            });
+            }),
+            // 5秒超时
+            new Promise(resolve => setTimeout(resolve, 5000))
+          ]);
+          
           closePromises.push(closePromise);
         } catch (error) {
-          this.logger.error(`[mysql-connector] Error closing connection ${connectionId}:`, error);
+          this.logger.error(`[mysql-connector] Error during connection cleanup ${connectionId}:`, error);
         }
       }
+      
+      // 无论关闭是否成功，都从map中删除
+      this.connections.delete(connectionId);
     }
     
-    // 等待所有连接关闭
+    // 等待所有连接关闭操作完成或超时
     if (closePromises.length > 0) {
       await Promise.allSettled(closePromises);
     }
     
+    this.logger.info('[mysql-connector] All connections closed or timed out');
+    
     // 清空连接映射
     this.connections.clear();
-    this.logger.info('[mysql-connector] All connections closed');
   }
   //表数据预览
   async previewTableData(connectionId: string, tableName: string, limit: number = 10) {
