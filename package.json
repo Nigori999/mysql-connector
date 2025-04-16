@@ -1,5 +1,5 @@
 {
-    "name": "@nocobase/plugin-mysql-connector",
+    "name": "@my-plugins/mysql-connector",
     "version": "1.6.20",
     "main": "dist/server/index.js",
     "module": "dist/client/index.js",
