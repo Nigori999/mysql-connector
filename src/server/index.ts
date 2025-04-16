@@ -1,4 +1,4 @@
-// server/index.ts - 服务端入口文件
+// server/index.ts 文件修改
 import { InstallOptions, Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import MySQLManager from './mysql-manager';
@@ -21,7 +21,7 @@ const handleServerError = (ctx, error, defaultMessage = '操作失败') => {
       stack: error.stack,
       endpoint: ctx.request.path,
       method: ctx.request.method,
-      params: ctx.action.params
+      params: ctx.action?.params
     });
     
     // 处理常见的MySQL错误并返回友好信息
@@ -83,28 +83,34 @@ export default class MySQLConnectorPlugin extends Plugin {
 
   // 在卸载时清理
   async remove() {
-    // 删除关联的数据库表
+    // 先关闭所有MySQL连接
+    if (this.mysqlManager) {
+      await this.mysqlManager.closeAllConnections();
+    }
+    
     // 使用更安全的方式处理日志设置
     const sequelize = this.db.sequelize;
     let originalLogging = false;
     
     try {
       // 临时存储并关闭日志
-      if (typeof sequelize['getDialect'] === 'function') {
-        // 尝试通过API获取和设置日志配置
-        originalLogging = (sequelize as any).options?.logging;
-        (sequelize as any).options = (sequelize as any).options || {};
-        (sequelize as any).options.logging = false;
+      if (sequelize && typeof sequelize['options'] === 'object') {
+        originalLogging = sequelize.options?.logging;
+        sequelize.options = sequelize.options || {};
+        sequelize.options.logging = false;
       }
       
       // 删除表
-      await this.db.getCollection('mysql_connections').model.drop();
+      const collection = this.db.getCollection('mysql_connections');
+      if (collection && collection.model) {
+        await collection.model.drop();
+      }
     } catch (error) {
       console.error('删除表失败:', error);
     } finally {
       // 恢复日志设置
-      if (typeof sequelize['getDialect'] === 'function' && (sequelize as any).options) {
-        (sequelize as any).options.logging = originalLogging;
+      if (sequelize && typeof sequelize['options'] === 'object') {
+        sequelize.options.logging = originalLogging;
       }
     }
   }
@@ -115,6 +121,13 @@ export default class MySQLConnectorPlugin extends Plugin {
     
     // 注册资源和操作 - 使用闭包捕获 mysqlManager 避免 this 上下文问题
     const mysqlManager = this.mysqlManager;
+    
+    // 在应用关闭前关闭所有MySQL连接
+    this.app.on('beforeStop', async () => {
+      if (this.mysqlManager) {
+        await this.mysqlManager.closeAllConnections();
+      }
+    });
     
     this.app.resourcer.define({
       name: 'mysql',
@@ -170,6 +183,20 @@ export default class MySQLConnectorPlugin extends Plugin {
             handleServerError(ctx, error, '导入表失败');
           }
         },
+        importTables: async (ctx, next) => {
+            const { connectionId, tableNames } = ctx.action.params;
+            try {
+              // 批量处理所有表
+              const results = await mysqlManager.importTables(connectionId, tableNames);
+              ctx.body = { 
+                success: true, 
+                message: '批量导入完成', 
+                data: results 
+              };
+            } catch (error) {
+              handleServerError(ctx, error, '批量导入失败');
+            }
+          },
         getTableSchema: async (ctx, next) => {
           const { connectionId, tableName } = ctx.action.params;
           try {
@@ -178,8 +205,25 @@ export default class MySQLConnectorPlugin extends Plugin {
           } catch (error) {
             handleServerError(ctx, error, '获取表结构失败');
           }
-        }
+        },
+        previewTableData: async (ctx, next) => {
+            const { connectionId, tableName, limit = 10 } = ctx.action.params;
+            try {
+              const data = await mysqlManager.previewTableData(connectionId, tableName, limit);
+              ctx.body = { success: true, data };
+            } catch (error) {
+              handleServerError(ctx, error, '获取表数据预览失败');
+            }
+          }
       },
     });
   }
+
+  // 添加卸载方法
+  async beforeUnload() {
+    if (this.mysqlManager) {
+      await this.mysqlManager.closeAllConnections();
+    }
+  }
+  
 }

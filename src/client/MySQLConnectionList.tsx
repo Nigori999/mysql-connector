@@ -108,7 +108,7 @@ function connectionReducer(state: ConnectionState, action: ConnectionAction): Co
 
 export const MySQLConnectionList: React.FC = () => {
   const { t } = useTranslation('mysql-connector');
-  const { connections, loading, refresh, connect, disconnect, listTables, importTable, listTableColumns } = useMySQLConnections();
+  const { connections, loading, refresh, connect, disconnect, listTables, importTable,importTables, listTableColumns } = useMySQLConnections();
   
   // 使用reducer替代多个useState
   const [state, dispatch] = useReducer(connectionReducer, initialState);
@@ -223,88 +223,72 @@ export const MySQLConnectionList: React.FC = () => {
   // 批量导入表
   const handleBatchImportTables = async () => {
     if (!state.currentConnection || state.selectedRowKeys.length === 0) return;
-    
-    Modal.confirm({
-      title: t('批量导入表'),
-      content: t('确定要导入选中的 {count} 个表吗？', { count: state.selectedRowKeys.length }),
-      icon: <ExclamationCircleOutlined />,
-      onOk: async () => {
-        let successCount = 0;
-        let failCount = 0;
-        dispatch({ type: 'SET_IMPORT_LOADING', payload: true });
+  
+  Modal.confirm({
+    title: t('批量导入表'),
+    content: (
+      <>
+        <p>{t('确定要导入选中的 {count} 个表吗？', { count: state.selectedRowKeys.length })}</p>
+        <Alert 
+          message={t('提示')} 
+          description={t('导入过程中请勿关闭此页面。根据表的数量和复杂度，导入可能需要一些时间。')} 
+          type="info" 
+          showIcon
+          style={{ marginTop: 16 }}
+        />
+      </>
+    ),
+    icon: <ExclamationCircleOutlined />,
+    onOk: async () => {
+      dispatch({ type: 'SET_IMPORT_LOADING', payload: true });
+      
+      try {
+        // 使用批量API进行导入
+        const result = await importTables({
+          connectionId: state.currentConnection,
+          tableNames: state.selectedRowKeys
+        });
         
-        try {
-          // 限制并发为3个请求
-          const concurrency = 3;
-          const chunks = [];
-          
-          // 将表名分组为小批次
-          for (let i = 0; i < state.selectedRowKeys.length; i += concurrency) {
-            chunks.push(state.selectedRowKeys.slice(i, i + concurrency));
-          }
-          
-          // 逐批处理表导入
-          for (const chunk of chunks) {
-            const results = await Promise.allSettled(
-              chunk.map(async (tableName) => {
-                try {
-                  const collectionName = `mysql_${tableName}`;
-                  await importTable({
-                    connectionId: state.currentConnection as string,
-                    tableName,
-                    collectionName,
-                  });
-                  return { tableName, success: true };
-                } catch (error) {
-                  console.error(`导入表 ${tableName} 失败:`, error);
-                  return { tableName, success: false, error };
-                }
-              })
-            );
-            
-            // 统计结果
-            results.forEach(result => {
-              if (result.status === 'fulfilled') {
-                if (result.value.success) {
-                  successCount++;
-                } else {
-                  failCount++;
-                }
-              } else {
-                failCount++;
-                console.error(`批量导入出错:`, result.reason);
-              }
-            });
-          }
-          
-          // 显示结果通知
-          if (successCount > 0) {
-            notification.success({
-              message: t('批量导入完成'),
-              description: t('成功导入 {successCount} 个表，失败 {failCount} 个', { 
-                successCount, failCount 
-              }),
-              duration: 5
-            });
-          } else if (failCount > 0) {
-            notification.error({
-              message: t('批量导入失败'),
-              description: t('所有表导入均失败，请检查日志'),
-              duration: 5
-            });
-          }
-        } catch (error) {
-          notification.error({
-            message: t('批量导入出错'),
-            description: error.message || t('未知错误'),
-            duration: 5
+        notification.success({
+          message: t('批量导入完成'),
+          description: t('成功导入 {successCount} 个表，失败 {failCount} 个', { 
+            successCount: result.data.successful?.length || 0, 
+            failCount: result.data.failed?.length || 0 
+          }),
+          duration: 5
+        });
+        
+        // 如果有失败的表，显示详细信息
+        if (result.data.failed && result.data.failed.length > 0) {
+          Modal.warning({
+            title: t('部分表导入失败'),
+            content: (
+              <div>
+                <p>{t('以下表导入失败:')}</p>
+                <ul>
+                  {result.data.failed.map(failure => (
+                    <li key={failure.tableName}>
+                      {failure.tableName}: {failure.error}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ),
+            width: 600
           });
-        } finally {
-          dispatch({ type: 'SET_IMPORT_LOADING', payload: false });
-          dispatch({ type: 'RESET_TABLE_SELECTION' });
         }
+      } catch (error) {
+        notification.error({
+          message: t('批量导入出错'),
+          description: error.message || t('未知错误'),
+          duration: 5
+        });
+      } finally {
+        dispatch({ type: 'SET_IMPORT_LOADING', payload: false });
+        dispatch({ type: 'RESET_TABLE_SELECTION' });
       }
-    });
+    }
+  });
   };
 
   // 查看表结构信息

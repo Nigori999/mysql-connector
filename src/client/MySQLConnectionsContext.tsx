@@ -22,6 +22,7 @@ interface MySQLConnectionsContextType {
     disconnect: (connectionId: string) => Promise<any>;
     listTables: (connectionId: string) => Promise<any>;
     importTable: (params: {connectionId: string, tableName: string, collectionName: string}) => Promise<any>;
+    importTables: (params: {connectionId: string, tableNames: string[]}) => Promise<any>;
     listTableColumns: (connectionId: string, tableName: string) => Promise<any>; // 添加这一行
   }
 
@@ -98,6 +99,14 @@ export const MySQLConnectionsProvider: React.FC<MySQLConnectionsProviderProps> =
     });
   };
 
+  const importTables = async (params: {connectionId: string, tableNames: string[]}) => {
+    return api.request({
+      resource: 'mysql',
+      action: 'importTables',
+      params
+    });
+  };
+
   useEffect(() => {
     fetchConnections();
   }, []);
@@ -113,6 +122,7 @@ export const MySQLConnectionsProvider: React.FC<MySQLConnectionsProviderProps> =
         disconnect,
         listTables,
         importTable,
+        importTables,
         listTableColumns // 添加这一行
       }}
     >

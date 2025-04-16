@@ -23,6 +23,7 @@ interface MySQLConnection {
   connection?: mysql.Connection | mysql.Pool;  // 支持单个连接或连接池
   createdAt?: Date;
   updatedAt?: Date;
+  lastUsed?: number;
 }
 
 // 使用环境变量保存加密密钥，或者使用NocoBase的配置系统
@@ -281,6 +282,9 @@ export default class MySQLManager {
         throw new Error(`创建数据库连接池失败: ${error.message}`);
       }
     }
+
+    // 更新最后使用时间
+  connectionInfo.lastUsed = Date.now();
   
     return connectionInfo.connection as mysql.Pool;
   }
@@ -308,41 +312,6 @@ export default class MySQLManager {
         connectionId
       });
       throw new Error(`获取表列表失败: ${error.message}`);
-    }
-  }
-
-  async getTableSchema(connectionId: string, tableName: string) {
-    this.logger.info('[mysql-connector] Getting table schema', { 
-      connectionId, 
-      tableName 
-    });
-    
-    try {
-      const pool = await this.getConnection(connectionId);
-      
-      // 获取表结构
-      const [columns] = await pool.query(`DESCRIBE \`${tableName}\``);
-      this.logger.debug(`[mysql-connector] Table structure retrieved`, {
-        columnsCount: (columns as any[]).length
-      });
-      
-      // 获取索引
-      const [indexes] = await pool.query(`SHOW INDEX FROM \`${tableName}\``);
-      this.logger.debug(`[mysql-connector] Table indexes retrieved`, {
-        indexesCount: (indexes as any[]).length
-      });
-      
-      return {
-        columns: columns as any[],
-        indexes: indexes as any[]
-      };
-    } catch (error) {
-      this.logger.error('[mysql-connector] Error getting table schema', { 
-        error: error.message,
-        connectionId,
-        tableName
-      });
-      throw new Error(`获取表结构失败: ${error.message}`);
     }
   }
 
@@ -458,6 +427,61 @@ export default class MySQLManager {
     }
   }
 
+  async importTables(connectionId: string, tableNames: string[]) {
+    this.logger.info('[mysql-connector] Batch importing tables', { 
+      connectionId, 
+      tableCount: tableNames.length 
+    });
+    
+    const results = {
+      successful: [],
+      failed: []
+    };
+    
+    // 限制并发
+    const CONCURRENCY = 3;
+    
+    // 分批处理
+    for (let i = 0; i < tableNames.length; i += CONCURRENCY) {
+      const batch = tableNames.slice(i, i + CONCURRENCY);
+      const batchPromises = batch.map(async (tableName) => {
+        try {
+          // 默认使用表名作为集合名
+          const collectionName = `mysql_${tableName}`;
+          
+          // 调用现有的导入方法
+          const result = await this.importTable(connectionId, tableName, collectionName);
+          
+          results.successful.push({
+            tableName,
+            collectionName
+          });
+          
+          return { success: true, tableName };
+        } catch (error) {
+          this.logger.error(`[mysql-connector] Failed to import table ${tableName}:`, error);
+          
+          results.failed.push({
+            tableName,
+            error: error.message
+          });
+          
+          return { success: false, tableName, error: error.message };
+        }
+      });
+      
+      // 等待当前批次完成
+      await Promise.all(batchPromises);
+    }
+    
+    this.logger.info('[mysql-connector] Batch import completed', {
+      successful: results.successful.length,
+      failed: results.failed.length
+    });
+    
+    return results;
+  }
+
   private encryptPassword(password: string): string {
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
@@ -474,5 +498,138 @@ export default class MySQLManager {
     let decrypted = decipher.update(encryptedText);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
     return decrypted.toString();
+  }
+
+  async closeAllConnections() {
+    this.logger.info('[mysql-connector] Closing all active connections');
+    
+    // 逐个关闭所有活跃连接
+    const closePromises = [];
+    for (const [connectionId, connectionInfo] of this.connections.entries()) {
+      if (connectionInfo.connection) {
+        try {
+          this.logger.debug(`[mysql-connector] Closing connection: ${connectionId}`);
+          const closePromise = (connectionInfo.connection as mysql.Pool | mysql.Connection).end()
+            .catch(err => {
+              this.logger.error(`[mysql-connector] Error closing connection ${connectionId}:`, err);
+            });
+          closePromises.push(closePromise);
+        } catch (error) {
+          this.logger.error(`[mysql-connector] Error closing connection ${connectionId}:`, error);
+        }
+      }
+    }
+    
+    // 等待所有连接关闭
+    if (closePromises.length > 0) {
+      await Promise.allSettled(closePromises);
+    }
+    
+    // 清空连接映射
+    this.connections.clear();
+    this.logger.info('[mysql-connector] All connections closed');
+  }
+  //表数据预览
+  async previewTableData(connectionId: string, tableName: string, limit: number = 10) {
+    this.logger.info('[mysql-connector] Getting table data preview', { 
+      connectionId, tableName, limit 
+    });
+    
+    try {
+      const pool = await this.getConnection(connectionId);
+      
+      // 使用参数化查询，防止SQL注入
+      const [rows] = await pool.execute(
+        'SELECT * FROM ?? LIMIT ?', 
+        [tableName, limit]
+      );
+      
+      return rows;
+    } catch (error) {
+      this.logger.error('[mysql-connector] Error getting table data preview', { 
+        error: error.message,
+        connectionId,
+        tableName
+      });
+      throw new Error(`获取表数据预览失败: ${error.message}`);
+    }
+  }
+
+  private async scheduleConnectionCleanup() {
+    // 每30分钟检查一次空闲连接
+    const CLEANUP_INTERVAL = 30 * 60 * 1000;
+    
+    setInterval(() => {
+      this.cleanupIdleConnections();
+    }, CLEANUP_INTERVAL);
+  }
+  
+  private async cleanupIdleConnections() {
+    this.logger.info('[mysql-connector] Cleaning up idle connections');
+    const now = Date.now();
+    const IDLE_TIMEOUT = 60 * 60 * 1000; // 1小时不活动则关闭
+    
+    for (const [connectionId, connectionInfo] of this.connections.entries()) {
+      if (connectionInfo.connection && connectionInfo.lastUsed) {
+        if ((now - connectionInfo.lastUsed) > IDLE_TIMEOUT) {
+          this.logger.info(`[mysql-connector] Closing idle connection: ${connectionId}`);
+          try {
+            await (connectionInfo.connection as mysql.Pool).end();
+            // 只移除连接对象，保留连接信息
+            connectionInfo.connection = undefined;
+          } catch (error) {
+            this.logger.error(`[mysql-connector] Error closing idle connection: ${connectionId}`, error);
+          }
+        }
+      }
+    }
+  }
+
+  private tableSchemaCache: Map<string, {
+    timestamp: number,
+    schema: any
+  }> = new Map();
+  
+  // 缓存过期时间 (10分钟)
+  private SCHEMA_CACHE_TTL = 10 * 60 * 1000;
+  
+  async getTableSchema(connectionId: string, tableName: string) {
+    const cacheKey = `${connectionId}:${tableName}`;
+    const cachedSchema = this.tableSchemaCache.get(cacheKey);
+    const now = Date.now();
+    
+    // 使用缓存如果存在且未过期
+    if (cachedSchema && (now - cachedSchema.timestamp) < this.SCHEMA_CACHE_TTL) {
+      this.logger.debug(`[mysql-connector] Using cached schema for ${tableName}`);
+      return cachedSchema.schema;
+    }
+    
+    // 获取新的表结构
+    this.logger.info('[mysql-connector] Getting table schema', { 
+      connectionId, tableName 
+    });
+    
+    try {
+      const pool = await this.getConnection(connectionId);
+      
+      // 使用参数化查询防止SQL注入
+      const [columns] = await pool.execute('DESCRIBE ??', [tableName]);
+      const [indexes] = await pool.execute('SHOW INDEX FROM ??', [tableName]);
+      
+      const schema = {
+        columns: columns as any[],
+        indexes: indexes as any[]
+      };
+      
+      // 更新缓存
+      this.tableSchemaCache.set(cacheKey, {
+        timestamp: now,
+        schema
+      });
+      
+      return schema;
+    } catch (error) {
+      // 错误处理代码...
+    }
   }
 }
