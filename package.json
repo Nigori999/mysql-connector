@@ -1,7 +1,7 @@
 {
     "name": "nocobase-plugin-mysql-connector",
     "version": "1.7.18",
-    "main": "dist/server/index.js",
+    "main": "dist/index.js",
     "module": "dist/client/index.js",
     "displayName": "mysql-connector",
     "displayName.zh-CN": "MySQL 数据库连接器",
@@ -16,10 +16,7 @@
         "example"
     ],
     "scripts": {
-        "build": "yarn clean && yarn build:client && yarn build:server && yarn build:main && yarn verify",
-        "build:client": "tsc -p tsconfig.client.json",
-        "build:server": "tsc -p tsconfig.server.json",
-        "build:main": "tsc -p tsconfig.main.json",
+        "build": "yarn clean && tsc && yarn verify",
         "clean": "rimraf dist",
         "dev": "tsc -w",
         "pack": "yarn build && yarn pack",
