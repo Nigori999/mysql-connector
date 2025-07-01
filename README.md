@@ -15,7 +15,7 @@ NocoBase MySQL 连接器是一个功能强大的插件，允许您连接外部 M
 
 ### 前提条件
 
-- 已安装 NocoBase v1.6.20 或更高版本
+- 已安装 NocoBase v1.7.18 或更高版本
 - 具有插件管理权限的管理员账户
 - 外部 MySQL 数据库的访问凭据（主机地址、端口、数据库名、用户名和密码）
 
@@ -44,7 +44,7 @@ NocoBase MySQL 连接器是一个功能强大的插件，允许您连接外部 M
    npm run build
    npm pack
    ```
-   这将创建一个形如 `nocobase-plugin-mysql-connector-1.6.20.tgz` 的压缩包文件。
+   这将创建一个形如 `nocobase-plugin-mysql-connector-1.7.18.tgz` 的压缩包文件。
 
 #### 步骤二：上传插件到 NocoBase
 

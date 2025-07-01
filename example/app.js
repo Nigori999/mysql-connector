@@ -10,7 +10,7 @@ if (existsSync(envPath)) {
 
 export default {
   plugins: [
-    '@nocobase/plugin-mysql-connector'
+    'nocobase-plugin-mysql-connector'
   ],
   sourceConfig: {
     username: process.env.DB_USER,

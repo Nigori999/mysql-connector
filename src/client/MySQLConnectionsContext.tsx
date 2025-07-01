@@ -27,6 +27,13 @@ interface MySQLConnectionsContextType {
     importTables: (params: {connectionId: string, tableNames: string[]}) => Promise<any>;
     listTableColumns: (connectionId: string, tableName: string) => Promise<any>;
     clearError: () => void;
+    // 新增功能
+    testConnection: (connectionInfo: any) => Promise<any>;
+    importTablesWithProgress: (params: {connectionId: string, tableNames: string[]}) => Promise<any>;
+    getImportProgress: (progressId: string) => Promise<any>;
+    clearImportProgress: (progressId: string) => Promise<any>;
+    reconnectConnection: (connectionId: string) => Promise<any>;
+    retryFailedImports: (progressId: string, connectionId: string) => Promise<any>;
 }
 
 const MySQLConnectionsContext = createContext<MySQLConnectionsContextType | undefined>(undefined);
@@ -195,6 +202,104 @@ export const MySQLConnectionsProvider: React.FC<MySQLConnectionsProviderProps> =
     }
   };
 
+  // 连接测试功能
+  const testConnection = async (connectionInfo: any) => {
+    try {
+      setError(null);
+      
+      const response = await api.request({
+        resource: 'mysql',
+        action: 'testConnection',
+        data: connectionInfo
+      });
+      
+      return response;
+    } catch (error) {
+      return handleError(error, '连接测试');
+    }
+  };
+
+  // 带进度的批量导入
+  const importTablesWithProgress = async (params: {connectionId: string, tableNames: string[]}) => {
+    try {
+      setError(null);
+      
+      const response = await api.request({
+        resource: 'mysql',
+        action: 'importTablesWithProgress',
+        params
+      });
+      
+      return response;
+    } catch (error) {
+      return handleError(error, '启动导入任务');
+    }
+  };
+
+  // 获取导入进度
+  const getImportProgress = async (progressId: string) => {
+    try {
+      const response = await api.request({
+        resource: 'mysql',
+        action: 'getImportProgress',
+        params: { progressId }
+      });
+      
+      return response;
+    } catch (error) {
+      return handleError(error, '获取导入进度');
+    }
+  };
+
+  // 清除导入进度
+  const clearImportProgress = async (progressId: string) => {
+    try {
+      const response = await api.request({
+        resource: 'mysql',
+        action: 'clearImportProgress',
+        params: { progressId }
+      });
+      
+      return response;
+    } catch (error) {
+      return handleError(error, '清除导入进度');
+    }
+  };
+
+  // 重新连接
+  const reconnectConnection = async (connectionId: string) => {
+    try {
+      setError(null);
+      
+      const response = await api.request({
+        resource: 'mysql',
+        action: 'reconnectConnection',
+        params: { connectionId }
+      });
+      
+      return response;
+    } catch (error) {
+      return handleError(error, '重新连接');
+    }
+  };
+
+  // 重试失败的导入
+  const retryFailedImports = async (progressId: string, connectionId: string) => {
+    try {
+      setError(null);
+      
+      const response = await api.request({
+        resource: 'mysql',
+        action: 'retryFailedImports',
+        params: { progressId, connectionId }
+      });
+      
+      return response;
+    } catch (error) {
+      return handleError(error, '重试失败的导入');
+    }
+  };
+
   // 初始加载连接列表
   useEffect(() => {
     fetchConnections().catch(err => {
@@ -221,7 +326,14 @@ export const MySQLConnectionsProvider: React.FC<MySQLConnectionsProviderProps> =
         importTable,
         importTables,
         listTableColumns,
-        clearError
+        clearError,
+        // 新增功能
+        testConnection,
+        importTablesWithProgress,
+        getImportProgress,
+        clearImportProgress,
+        reconnectConnection,
+        retryFailedImports
       }}
     >
       {props.children}

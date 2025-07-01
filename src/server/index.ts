@@ -2,6 +2,8 @@
 import { InstallOptions, Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import MySQLManager from './mysql-manager';
+import { MySQLDataSource } from './mysql-data-source';
+import { MYSQL_CONNECTOR_CONSTANTS } from '../shared/constants';
 
 // 添加类型声明
 declare module 'sequelize/types/sequelize' {
@@ -23,42 +25,29 @@ declare module 'sequelize' {
 
 // 添加统一错误处理工具函数
 const handleServerError = (ctx, error, defaultMessage = '操作失败') => {
-  // 当前时间戳
-  const timestamp = new Date().toISOString();
-  const errorId = Math.random().toString(36).substring(2, 10); // 生成简单的错误ID
-  
-  // 记录详细错误到日志
   const logger = ctx.app.logger || console;
   
-  // 避免使用.closed属性
-  let connectionState = 'UNKNOWN';
-  if (ctx.app?.db?.sequelize) {
-    connectionState = 'AVAILABLE';
-  } else {
-    connectionState = 'UNAVAILABLE';
-  }
-  
-  logger.error(`[mysql-connector] [${errorId}] Error at ${timestamp}:`, {
+  logger.error(`[mysql-connector] ${defaultMessage}:`, {
     error: error.message,
     stack: error.stack,
     endpoint: ctx.request?.path,
     method: ctx.request?.method,
     params: ctx.action?.params,
-    connectionState
   });
   
-  // 设置响应
-  ctx.status = 400;
-  ctx.body = { 
-    success: false, 
-    message: `${defaultMessage} (Ref: ${errorId})`, 
-    error: {
-      message: error.message,
-      code: error.code || 'UNKNOWN_ERROR',
-      timestamp,
-      reference: errorId,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    }
+  // 使用NocoBase标准错误处理
+  if (error.status) {
+    ctx.status = error.status;
+  } else {
+    ctx.status = 400;
+  }
+  
+  ctx.body = {
+    errors: [{
+      message: error.message || defaultMessage,
+      code: error.code,
+      field: error.field,
+    }]
   };
 };
 
@@ -103,9 +92,31 @@ export default class MySQLConnectorPlugin extends Plugin {
       await this.db.import({
         directory: resolve(__dirname, 'collections'),
       });
+      
+      // 检查并更新表结构
+      await this.ensureTableStructure();
+      
       this.app.logger.info('[mysql-connector] Collections initialized successfully');
     } catch (error) {
       this.app.logger.error('[mysql-connector] Error initializing collections:', error);
+    }
+  }
+
+  // 确保数据库表结构是最新的
+  private async ensureTableStructure() {
+    try {
+      const collection = this.db.getCollection('mysql_connections');
+      if (!collection) {
+        this.app.logger.warn('[mysql-connector] mysql_connections collection not found');
+        return;
+      }
+
+      // 同步表结构，这会添加缺失的字段
+      await collection.sync();
+      this.app.logger.info('[mysql-connector] Table structure synchronized');
+      
+    } catch (error) {
+      this.app.logger.error('[mysql-connector] Error ensuring table structure:', error);
     }
   }
 
@@ -252,6 +263,57 @@ export default class MySQLConnectorPlugin extends Plugin {
     this.app.logger.info('[mysql-connector] 插件加载中...');
     
     try{
+    // 注册MySQL数据源 - NocoBase 1.7.18正确方式
+    try {
+      // 方式1: 通过插件管理器注册数据源类型
+      if (this.app.pm) {
+        const pm = this.app.pm as any;
+        if (pm.addPlugin) {
+          pm.addPlugin({
+            type: 'data-source',
+            name: MYSQL_CONNECTOR_CONSTANTS.DATA_SOURCE.TYPE,
+            displayName: MYSQL_CONNECTOR_CONSTANTS.DATA_SOURCE.DISPLAY_NAME,
+            description: MYSQL_CONNECTOR_CONSTANTS.DATA_SOURCE.DESCRIPTION,
+            Component: MySQLDataSource
+          });
+          this.app.logger.info('[mysql-connector] 通过插件管理器注册MySQL数据源成功');
+        }
+      }
+
+      // 方式2: 直接注册到数据源工厂
+      if (this.app.dataSourceManager) {
+        const dsManager = this.app.dataSourceManager as any;
+        
+        if (dsManager.factory) {
+          const factory = dsManager.factory as any;
+          
+          // 注册数据源构造函数
+          if (typeof factory.register === 'function') {
+            factory.register(MYSQL_CONNECTOR_CONSTANTS.DATA_SOURCE.TYPE, MySQLDataSource);
+            this.app.logger.info('[mysql-connector] MySQL数据源已注册到工厂');
+          }
+          
+          // 注册数据源配置
+          if (typeof factory.define === 'function') {
+            factory.define(MYSQL_CONNECTOR_CONSTANTS.DATA_SOURCE.TYPE, {
+              displayName: MYSQL_CONNECTOR_CONSTANTS.DATA_SOURCE.DISPLAY_NAME, 
+              description: MYSQL_CONNECTOR_CONSTANTS.DATA_SOURCE.DESCRIPTION,
+              driverName: 'mysql2',
+              DataSource: MySQLDataSource
+            });
+            this.app.logger.info('[mysql-connector] MySQL数据源配置已定义');
+          }
+        }
+      }
+
+      this.app.logger.info('[mysql-connector] MySQL数据源注册完成');
+    } catch (dsError: any) {
+      this.app.logger.warn('[mysql-connector] 数据源注册失败:', dsError.message);
+      this.app.logger.info('[mysql-connector] 将以插件设置模式提供MySQL连接功能');
+    }
+
+    this.app.logger.info('[mysql-connector] 插件核心功能正常加载（MySQL连接管理器）');
+    
     // 初始化 MySQL 管理器
     this.mysqlManager = new MySQLManager(this.db);
 
@@ -285,141 +347,286 @@ export default class MySQLConnectorPlugin extends Plugin {
     
     this.app.resourcer.define({
       name: 'mysql',
+      type: 'single',
+      only: [],
       actions: {
-        // 添加一个健康检查接口
-    health: async (ctx) => {
-        const isShutdown = isShuttingDown();
-        const dbActive = this.mysqlManager ? this.mysqlManager.isDbConnectionActive() : false;
-        
-        ctx.body = {
-          success: true,
-          status: isShutdown ? 'shutting_down' : (dbActive ? 'healthy' : 'db_inactive'),
-          message: isShutdown ? '系统正在关闭' : (dbActive ? '系统正常' : 'NocoBase 数据库连接不可用')
-        };
-      },
-        connect: async (ctx, next) => {
-          if (isShuttingDown()) {
-            ctx.status = 503;
-            ctx.body = { success: false, message: '系统正在关闭，无法创建新连接' };
-            return;
-          }
-          
-          const { database, host, port, username, password, name } = ctx.action.params;
-          try {
-            const connection = await mysqlManager.connect({
-              database,
-              host,
-              port,
-              username,
-              password,
-              name: name || `${host}:${port}/${database}`
-            });
-            ctx.body = { success: true, message: '连接成功', data: connection };
-          } catch (error) {
-            handleServerError(ctx, error, '连接失败');
+        // 健康检查接口
+        health: {
+          middleware: [],
+          handler: async (ctx) => {
+            const isShutdown = isShuttingDown();
+            const dbActive = this.mysqlManager ? this.mysqlManager.isDbConnectionActive() : false;
+            
+            ctx.body = {
+              data: {
+                status: isShutdown ? 'shutting_down' : (dbActive ? 'healthy' : 'db_inactive'),
+                message: isShutdown ? '系统正在关闭' : (dbActive ? '系统正常' : 'NocoBase 数据库连接不可用')
+              }
+            };
           }
         },
-        disconnect: async (ctx, next) => {
-          const { connectionId } = ctx.action.params;
-          try {
-            await mysqlManager.disconnect(connectionId);
-            ctx.body = { success: true, message: '断开连接成功' };
-          } catch (error) {
-            handleServerError(ctx, error, '断开连接失败');
-          }
-        },
-        listConnections: async (ctx, next) => {
-          try {
-            // 如果系统关闭中，返回空列表
+        connect: {
+          middleware: [],
+          handler: async (ctx) => {
             if (isShuttingDown()) {
-              ctx.body = { success: true, data: [] };
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法创建新连接' }] };
               return;
             }
             
-            const connections = await mysqlManager.listConnections();
-            ctx.body = { success: true, data: connections };
-          } catch (error) {
-            handleServerError(ctx, error, '获取连接列表失败');
+            const { database, host, port, username, password, name } = ctx.action.params;
+            try {
+              const connection = await mysqlManager.connect({
+                database,
+                host,
+                port,
+                username,
+                password,
+                name: name || `${host}:${port}/${database}`
+              });
+              ctx.body = { data: connection };
+            } catch (error) {
+              handleServerError(ctx, error, '连接失败');
+            }
           }
         },
-        listTables: async (ctx, next) => {
-          if (isShuttingDown()) {
-            ctx.status = 503;
-            ctx.body = { success: false, message: '系统正在关闭，无法获取表列表' };
-            return;
-          }
-          
-          const { connectionId } = ctx.action.params;
-          try {
-            const tables = await mysqlManager.listTables(connectionId);
-            ctx.body = { success: true, data: tables };
-          } catch (error) {
-            handleServerError(ctx, error, '获取表列表失败');
+        disconnect: {
+          middleware: [],
+          handler: async (ctx) => {
+            const { connectionId } = ctx.action.params;
+            try {
+              await mysqlManager.disconnect(connectionId);
+              ctx.body = { data: { message: '断开连接成功' } };
+            } catch (error) {
+              handleServerError(ctx, error, '断开连接失败');
+            }
           }
         },
-        importTable: async (ctx, next) => {
-          if (isShuttingDown()) {
-            ctx.status = 503;
-            ctx.body = { success: false, message: '系统正在关闭，无法导入表' };
-            return;
-          }
-          
-          const { connectionId, tableName, collectionName } = ctx.action.params;
-          try {
-            const result = await mysqlManager.importTable(connectionId, tableName, collectionName);
-            ctx.body = { success: true, message: '表导入成功', data: result };
-          } catch (error) {
-            handleServerError(ctx, error, '导入表失败');
-          }
-        },
-        importTables: async (ctx, next) => {
-          if (isShuttingDown()) {
-            ctx.status = 503;
-            ctx.body = { success: false, message: '系统正在关闭，无法批量导入表' };
-            return;
-          }
-          
-          const { connectionId, tableNames } = ctx.action.params;
-          try {
-            // 批量处理所有表
-            const results = await mysqlManager.importTables(connectionId, tableNames);
-            ctx.body = { 
-              success: true, 
-              message: '批量导入完成', 
-              data: results 
-            };
-          } catch (error) {
-            handleServerError(ctx, error, '批量导入失败');
+        listConnections: {
+          middleware: [],
+          handler: async (ctx) => {
+            try {
+              // 如果系统关闭中，返回空列表
+              if (isShuttingDown()) {
+                ctx.body = { data: [] };
+                return;
+              }
+              
+              const connections = await mysqlManager.listConnections();
+              ctx.body = { data: connections };
+            } catch (error) {
+              handleServerError(ctx, error, '获取连接列表失败');
+            }
           }
         },
-        getTableSchema: async (ctx, next) => {
-          if (isShuttingDown()) {
-            ctx.status = 503;
-            ctx.body = { success: false, message: '系统正在关闭，无法获取表结构' };
-            return;
-          }
-          
-          const { connectionId, tableName } = ctx.action.params;
-          try {
-            const schema = await mysqlManager.getTableSchema(connectionId, tableName);
-            ctx.body = { success: true, data: schema.columns };
-          } catch (error) {
-            handleServerError(ctx, error, '获取表结构失败');
+        listTables: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法获取表列表' }] };
+              return;
+            }
+            
+            const { connectionId } = ctx.action.params;
+            try {
+              const tables = await mysqlManager.listTables(connectionId);
+              ctx.body = { data: tables };
+            } catch (error) {
+              handleServerError(ctx, error, '获取表列表失败');
+            }
           }
         },
-        previewTableData: async (ctx, next) => {
-          if (isShuttingDown()) {
-            ctx.status = 503;
-            ctx.body = { success: false, message: '系统正在关闭，无法获取表数据预览' };
-            return;
+        importTable: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法导入表' }] };
+              return;
+            }
+            
+            const { connectionId, tableName, collectionName } = ctx.action.params;
+            try {
+              const result = await mysqlManager.importTable(connectionId, tableName, collectionName);
+              ctx.body = { data: result };
+            } catch (error) {
+              handleServerError(ctx, error, '导入表失败');
+            }
           }
-          
-          const { connectionId, tableName, limit = 10 } = ctx.action.params;
-          try {
-            const data = await mysqlManager.previewTableData(connectionId, tableName, limit);
-            ctx.body = { success: true, data };
-          } catch (error) {
-            handleServerError(ctx, error, '获取表数据预览失败');
+        },
+        importTables: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法批量导入表' }] };
+              return;
+            }
+            
+            const { connectionId, tableNames } = ctx.action.params;
+            try {
+              // 批量处理所有表
+              const results = await mysqlManager.importTables(connectionId, tableNames);
+              ctx.body = { data: results };
+            } catch (error) {
+              handleServerError(ctx, error, '批量导入失败');
+            }
+          }
+        },
+        getTableSchema: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法获取表结构' }] };
+              return;
+            }
+            
+            const { connectionId, tableName } = ctx.action.params;
+            try {
+              const schema = await mysqlManager.getTableSchema(connectionId, tableName);
+              ctx.body = { data: schema.columns };
+            } catch (error) {
+              handleServerError(ctx, error, '获取表结构失败');
+            }
+          }
+        },
+        previewTableData: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法获取表数据预览' }] };
+              return;
+            }
+            
+            const { connectionId, tableName, limit = 10 } = ctx.action.params;
+            try {
+              const data = await mysqlManager.previewTableData(connectionId, tableName, limit);
+              ctx.body = { data };
+            } catch (error) {
+              handleServerError(ctx, error, '获取表数据预览失败');
+            }
+          }
+        },
+        
+        // 连接测试功能
+        testConnection: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法测试连接' }] };
+              return;
+            }
+            
+            const { database, host, port, username, password } = ctx.action.params;
+            try {
+              const result = await mysqlManager.testConnection({
+                database,
+                host,
+                port,
+                username,
+                password
+              });
+              ctx.body = { data: result };
+            } catch (error) {
+              handleServerError(ctx, error, '连接测试失败');
+            }
+          }
+        },
+        
+        // 带进度的批量导入
+        importTablesWithProgress: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法执行导入操作' }] };
+              return;
+            }
+            
+            const { connectionId, tableNames } = ctx.action.params;
+            try {
+              const result = await mysqlManager.importTablesWithProgress(connectionId, tableNames);
+              ctx.body = { data: result };
+            } catch (error) {
+              handleServerError(ctx, error, '启动导入任务失败');
+            }
+          }
+        },
+        
+        // 获取导入进度
+        getImportProgress: {
+          middleware: [],
+          handler: async (ctx) => {
+            const { progressId } = ctx.action.params;
+            try {
+              const progress = mysqlManager.getImportProgress(progressId);
+              if (!progress) {
+                ctx.status = 404;
+                ctx.body = { errors: [{ message: '进度信息不存在' }] };
+                return;
+              }
+              ctx.body = { data: progress };
+            } catch (error) {
+              handleServerError(ctx, error, '获取进度信息失败');
+            }
+          }
+        },
+        
+        // 清除导入进度
+        clearImportProgress: {
+          middleware: [],
+          handler: async (ctx) => {
+            const { progressId } = ctx.action.params;
+            try {
+              mysqlManager.clearImportProgress(progressId);
+              ctx.body = { data: { message: '进度信息已清除' } };
+            } catch (error) {
+              handleServerError(ctx, error, '清除进度信息失败');
+            }
+          }
+        },
+        
+        // 重新连接
+        reconnectConnection: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法重连' }] };
+              return;
+            }
+            
+            const { connectionId } = ctx.action.params;
+            try {
+              const success = await mysqlManager.reconnectConnection(connectionId);
+              ctx.body = { data: { success, message: success ? '重连成功' : '重连失败' } };
+            } catch (error) {
+              handleServerError(ctx, error, '重连操作失败');
+            }
+          }
+        },
+        
+        // 重试失败的导入
+        retryFailedImports: {
+          middleware: [],
+          handler: async (ctx) => {
+            if (isShuttingDown()) {
+              ctx.status = 503;
+              ctx.body = { errors: [{ message: '系统正在关闭，无法重试导入' }] };
+              return;
+            }
+            
+            const { progressId, connectionId } = ctx.action.params;
+            try {
+              await mysqlManager.retryFailedImports(progressId, connectionId);
+              ctx.body = { data: { message: '重试任务已启动' } };
+            } catch (error) {
+              handleServerError(ctx, error, '启动重试任务失败');
+            }
           }
         }
       },

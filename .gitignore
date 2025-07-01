@@ -1,8 +1,15 @@
-# 原有忽略项
+# 依赖和构建输出
 node_modules
 dist
 *.log
 *.tgz
+
+# TypeScript 编译输出
+*.js
+*.d.ts
+!src/shared/constants.ts
+!example/**/*.js
+!verify-build.js
 
 # Yarn 相关忽略
 .yarn/*
@@ -16,3 +23,13 @@ dist
 # Yarn 错误日志
 yarn-debug.log*
 yarn-error.log*
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db

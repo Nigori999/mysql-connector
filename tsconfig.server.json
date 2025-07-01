@@ -8,11 +8,11 @@
       "declaration": true,
       "skipLibCheck": true,
       "outDir": "dist/server",
-      "rootDir": "src/server",
+      "rootDir": "src",
       "strict": false,
       "noImplicitAny": false,
       "resolveJsonModule": true
     },
-    "include": ["src/server/**/*"],
+    "include": ["src/server/**/*", "src/shared/**/*"],
     "exclude": ["node_modules", "dist", "**/*.spec.ts"]
   }

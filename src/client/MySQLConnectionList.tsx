@@ -13,6 +13,7 @@ import {
 import { useMySQLConnections } from './MySQLConnectionsContext';
 import { useTranslation } from 'react-i18next';
 import { handleAPIError, getMySQLConnectionErrorMappings, getTableOperationErrorMappings } from './utils/errorHandlers';
+import { ImportProgressModal } from './ImportProgressModal';
 
 const { Text, Link, Title, Paragraph } = Typography;
 
@@ -31,6 +32,11 @@ interface ConnectionState {
   selectedRowKeys: string[];
   connectionDetail: any;
   detailModalVisible: boolean;
+  // 新增状态
+  testingConnection: boolean;
+  progressModalVisible: boolean;
+  currentProgressId: string | null;
+  reconnecting: Record<string, boolean>;
 }
 
 // 定义状态操作类型
@@ -49,7 +55,11 @@ type ConnectionAction =
   | { type: 'SET_SELECTED_ROW_KEYS', payload: string[] }
   | { type: 'SET_CONNECTION_DETAIL', payload: any }
   | { type: 'TOGGLE_DETAIL_MODAL', payload: boolean }
-  | { type: 'RESET_TABLE_SELECTION' };
+  | { type: 'RESET_TABLE_SELECTION' }
+  | { type: 'SET_TESTING_CONNECTION', payload: boolean }
+  | { type: 'TOGGLE_PROGRESS_MODAL', payload: boolean }
+  | { type: 'SET_CURRENT_PROGRESS_ID', payload: string | null }
+  | { type: 'SET_RECONNECTING', payload: { connectionId: string; reconnecting: boolean } };
 
 // 初始状态
 const initialState: ConnectionState = {
@@ -66,6 +76,11 @@ const initialState: ConnectionState = {
   selectedRowKeys: [],
   connectionDetail: null,
   detailModalVisible: false,
+  // 新增状态初始值
+  testingConnection: false,
+  progressModalVisible: false,
+  currentProgressId: null,
+  reconnecting: {},
 };
 
 // Reducer函数
@@ -101,6 +116,20 @@ function connectionReducer(state: ConnectionState, action: ConnectionAction): Co
       return { ...state, detailModalVisible: action.payload };
     case 'RESET_TABLE_SELECTION':
       return { ...state, selectedRowKeys: [] };
+    case 'SET_TESTING_CONNECTION':
+      return { ...state, testingConnection: action.payload };
+    case 'TOGGLE_PROGRESS_MODAL':
+      return { ...state, progressModalVisible: action.payload };
+    case 'SET_CURRENT_PROGRESS_ID':
+      return { ...state, currentProgressId: action.payload };
+    case 'SET_RECONNECTING':
+      return { 
+        ...state, 
+        reconnecting: { 
+          ...state.reconnecting, 
+          [action.payload.connectionId]: action.payload.reconnecting 
+        } 
+      };
     default:
       return state;
   }
@@ -108,7 +137,10 @@ function connectionReducer(state: ConnectionState, action: ConnectionAction): Co
 
 export const MySQLConnectionList: React.FC = () => {
   const { t } = useTranslation('mysql-connector');
-  const { connections, loading, refresh, connect, disconnect, listTables, importTable,importTables, listTableColumns } = useMySQLConnections();
+  const { 
+    connections, loading, refresh, connect, disconnect, listTables, importTable, importTables, 
+    listTableColumns, testConnection, importTablesWithProgress, reconnectConnection 
+  } = useMySQLConnections();
   
   // 使用reducer替代多个useState
   const [state, dispatch] = useReducer(connectionReducer, initialState);
@@ -118,6 +150,43 @@ export const MySQLConnectionList: React.FC = () => {
   const handleViewConnectionDetail = (connection) => {
     dispatch({ type: 'SET_CONNECTION_DETAIL', payload: connection });
     dispatch({ type: 'TOGGLE_DETAIL_MODAL', payload: true });
+  };
+
+  // 测试连接
+  const handleTestConnection = async (values) => {
+    dispatch({ type: 'SET_TESTING_CONNECTION', payload: true });
+    dispatch({ type: 'CLEAR_FORM_ERRORS' });
+    
+    try {
+      const response = await testConnection(values);
+      
+      if (response.data?.success) {
+        notification.success({
+          message: t('连接测试成功'),
+          description: response.data.message || t('连接测试通过，可以正常使用'),
+          icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />
+        });
+      } else {
+        notification.error({
+          message: t('连接测试失败'),
+          description: response.data?.message || t('连接测试失败，请检查配置'),
+          icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />
+        });
+      }
+    } catch (error) {
+      const { formErrors } = handleAPIError(
+        error, 
+        t, 
+        getMySQLConnectionErrorMappings(t),
+        '连接测试失败'
+      );
+      
+      if (formErrors) {
+        dispatch({ type: 'SET_FORM_ERRORS', payload: formErrors });
+      }
+    } finally {
+      dispatch({ type: 'SET_TESTING_CONNECTION', payload: false });
+    }
   };
 
   // 连接到数据库
@@ -220,7 +289,7 @@ export const MySQLConnectionList: React.FC = () => {
     }
   };
 
-  // 批量导入表
+  // 批量导入表（带进度）
   const handleBatchImportTables = async () => {
     if (!state.currentConnection || state.selectedRowKeys.length === 0) return;
   
@@ -231,7 +300,7 @@ export const MySQLConnectionList: React.FC = () => {
         <p>{t('确定要导入选中的 {count} 个表吗？', { count: state.selectedRowKeys.length })}</p>
         <Alert 
           message={t('提示')} 
-          description={t('导入过程中请勿关闭此页面。根据表的数量和复杂度，导入可能需要一些时间。')} 
+            description={t('导入过程中您可以通过进度窗口查看实时进度。根据表的数量和复杂度，导入可能需要一些时间。')} 
           type="info" 
           showIcon
           style={{ marginTop: 16 }}
@@ -243,43 +312,28 @@ export const MySQLConnectionList: React.FC = () => {
       dispatch({ type: 'SET_IMPORT_LOADING', payload: true });
       
       try {
-        // 使用批量API进行导入
-        const result = await importTables({
+          // 使用带进度跟踪的批量导入API
+          const result = await importTablesWithProgress({
           connectionId: state.currentConnection,
           tableNames: state.selectedRowKeys
         });
+          
+          if (result.data?.success && result.data.data?.progressId) {
+            // 设置进度ID并显示进度模态框
+            dispatch({ type: 'SET_CURRENT_PROGRESS_ID', payload: result.data.data.progressId });
+            dispatch({ type: 'TOGGLE_PROGRESS_MODAL', payload: true });
         
         notification.success({
-          message: t('批量导入完成'),
-          description: t('成功导入 {successCount} 个表，失败 {failCount} 个', { 
-            successCount: result.data.successful?.length || 0, 
-            failCount: result.data.failed?.length || 0 
-          }),
-          duration: 5
-        });
-        
-        // 如果有失败的表，显示详细信息
-        if (result.data.failed && result.data.failed.length > 0) {
-          Modal.warning({
-            title: t('部分表导入失败'),
-            content: (
-              <div>
-                <p>{t('以下表导入失败:')}</p>
-                <ul>
-                  {result.data.failed.map(failure => (
-                    <li key={failure.tableName}>
-                      {failure.tableName}: {failure.error}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ),
-            width: 600
-          });
+              message: t('导入任务已启动'),
+              description: t('正在后台导入表，您可以查看实时进度'),
+              duration: 3
+            });
+          } else {
+            throw new Error(result.data?.message || '启动导入任务失败');
         }
       } catch (error) {
         notification.error({
-          message: t('批量导入出错'),
+            message: t('启动导入任务失败'),
           description: error.message || t('未知错误'),
           duration: 5
         });
@@ -289,6 +343,34 @@ export const MySQLConnectionList: React.FC = () => {
       }
     }
   });
+  };
+
+  // 重新连接
+  const handleReconnect = async (connectionId: string) => {
+    dispatch({ type: 'SET_RECONNECTING', payload: { connectionId, reconnecting: true } });
+    
+    try {
+      const result = await reconnectConnection(connectionId);
+      
+      if (result.data?.success) {
+        notification.success({
+          message: t('重连成功'),
+          description: t('数据库连接已重新建立'),
+          icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />
+        });
+        refresh();
+      } else {
+        throw new Error(result.data?.message || '重连失败');
+      }
+    } catch (error) {
+      notification.error({
+        message: t('重连失败'),
+        description: error.message || t('重新连接数据库失败'),
+        duration: 5
+      });
+    } finally {
+      dispatch({ type: 'SET_RECONNECTING', payload: { connectionId, reconnecting: false } });
+    }
   };
 
   // 查看表结构信息
@@ -708,8 +790,8 @@ export const MySQLConnectionList: React.FC = () => {
 
           <Form.Item>
             <Space direction="vertical" style={{ width: '100%' }}>
-              <Row gutter={16}>
-                <Col span={12}>
+              <Row gutter={8}>
+                <Col span={8}>
                   <Button 
                     onClick={() => {
                       dispatch({ type: 'TOGGLE_CONNECT_MODAL', payload: false });
@@ -717,20 +799,34 @@ export const MySQLConnectionList: React.FC = () => {
                       form.resetFields();
                     }}
                     block
-                    disabled={state.submitting}
+                    disabled={state.submitting || state.testingConnection}
                   >
                     {t('取消')}
                   </Button>
                 </Col>
-                <Col span={12}>
+                <Col span={8}>
+                  <Button 
+                    onClick={() => {
+                      form.validateFields().then(values => {
+                        handleTestConnection(values);
+                      }).catch(console.error);
+                    }}
+                    block 
+                    loading={state.testingConnection}
+                    disabled={state.submitting || state.testingConnection}
+                  >
+                    {state.testingConnection ? t('测试中...') : t('测试连接')}
+                  </Button>
+                </Col>
+                <Col span={8}>
                   <Button 
                     type="primary" 
                     htmlType="submit" 
                     block 
                     loading={state.submitting}
-                    disabled={state.submitting}
+                    disabled={state.submitting || state.testingConnection}
                   >
-                    {state.submitting ? t('连接中...') : t('连接')}
+                    {state.submitting ? t('连接中...') : t('连接并保存')}
                   </Button>
                 </Col>
               </Row>
@@ -878,6 +974,17 @@ export const MySQLConnectionList: React.FC = () => {
           </Descriptions>
         )}
       </Modal>
+
+      {/* 导入进度模态框 */}
+      <ImportProgressModal
+        visible={state.progressModalVisible}
+        progressId={state.currentProgressId}
+        connectionId={state.currentConnection}
+        onClose={() => {
+          dispatch({ type: 'TOGGLE_PROGRESS_MODAL', payload: false });
+          dispatch({ type: 'SET_CURRENT_PROGRESS_ID', payload: null });
+        }}
+      />
     </div>
   );
 };

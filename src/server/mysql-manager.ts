@@ -39,6 +39,15 @@ export default class MySQLManager {
     schema: any
   }> = new Map();
   
+  // 进度管理
+  private importProgress: Map<string, {
+    total: number;
+    completed: number;
+    failed: number;
+    status: 'running' | 'completed' | 'failed';
+    details: Array<{tableName: string, status: 'pending' | 'success' | 'failed', error?: string}>;
+  }> = new Map();
+  
   // 缓存过期时间 (10分钟)
   private SCHEMA_CACHE_TTL = 10 * 60 * 1000;
 
@@ -126,13 +135,41 @@ export default class MySQLManager {
 
     try {
       this.initialized = true;
+      
+      // 首先确保数据库表结构是最新的
+      await this.ensureTableStructure();
+      
+      // 然后加载保存的连接
       await this.loadSavedConnections();
+      
       // 启动定期清理空闲连接
       this.scheduleConnectionCleanup();
     } catch (error) {
       this.logger.error('[mysql-connector] Failed to initialize MySQL manager', { error });
       // 设置为未初始化状态，以便可以重试
       this.initialized = false;
+    }
+  }
+
+  // 确保数据库表结构是最新的
+  private async ensureTableStructure() {
+    try {
+      // 等待一小段时间确保集合已经完全导入
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      const collection = this.db.getCollection('mysql_connections');
+      if (!collection) {
+        this.logger.warn('[mysql-connector] mysql_connections collection not found in MySQLManager');
+        return;
+      }
+
+      // 同步表结构，这会添加缺失的字段
+      await collection.sync();
+      this.logger.info('[mysql-connector] Table structure synchronized in MySQLManager');
+      
+    } catch (error) {
+      this.logger.error('[mysql-connector] Error ensuring table structure in MySQLManager:', error);
+      // 不要抛出错误，继续执行
     }
   }
 
@@ -947,5 +984,258 @@ export default class MySQLManager {
       this.logger.warn('[mysql-connector] Error checking DB connection status:', error.message);
       return false;
     }
+  }
+
+  // 连接测试功能
+  async testConnection(connectionInfo: Omit<MySQLConnection, 'id' | 'connection'>): Promise<{success: boolean, message: string, details?: any}> {
+    this.logger.info('[mysql-connector] Testing MySQL connection', {
+      host: connectionInfo.host,
+      port: connectionInfo.port,
+      database: connectionInfo.database,
+      username: connectionInfo.username
+    });
+
+    let testConnection: mysql.Connection | null = null;
+    
+    try {
+      // 创建测试连接
+      testConnection = await mysql.createConnection({
+        host: connectionInfo.host,
+        port: connectionInfo.port,
+        user: connectionInfo.username,
+        password: connectionInfo.password,
+        database: connectionInfo.database,
+        connectTimeout: 5000 // 5秒连接超时
+      });
+
+      // 测试基本查询
+      const [rows] = await testConnection.execute('SELECT 1 as test');
+      
+      // 测试数据库权限
+      const [tables] = await testConnection.execute('SHOW TABLES LIMIT 1');
+      
+      await testConnection.end();
+      
+      this.logger.info('[mysql-connector] Connection test successful');
+      
+      return {
+        success: true,
+        message: '连接测试成功',
+        details: {
+          tablesAccessible: Array.isArray(tables) && tables.length >= 0,
+          queryTest: rows && Array.isArray(rows) && rows.length > 0
+        }
+      };
+      
+    } catch (error) {
+      // 确保连接被关闭
+      if (testConnection) {
+        try {
+          await testConnection.end();
+        } catch (closeError) {
+          this.logger.warn('[mysql-connector] Error closing test connection:', closeError);
+        }
+      }
+      
+      this.logger.error('[mysql-connector] Connection test failed', { 
+        error: error.message,
+        code: error.code 
+      });
+      
+      // 返回具体的错误信息
+      let message = '连接测试失败';
+      if (error.code === 'ECONNREFUSED') {
+        message = '无法连接到数据库服务器，请检查主机地址和端口';
+      } else if (error.code === 'ER_ACCESS_DENIED_ERROR') {
+        message = '用户名或密码不正确';
+      } else if (error.code === 'ER_BAD_DB_ERROR') {
+        message = '指定的数据库不存在';
+      } else if (error.code === 'ETIMEDOUT') {
+        message = '连接超时，请检查网络连接';
+      } else {
+        message = `连接失败: ${error.message}`;
+      }
+      
+      return {
+        success: false,
+        message,
+        details: {
+          errorCode: error.code,
+          originalError: error.message
+        }
+      };
+    }
+  }
+
+  // 获取导入进度
+  getImportProgress(progressId: string) {
+    return this.importProgress.get(progressId) || null;
+  }
+
+  // 清除导入进度
+  clearImportProgress(progressId: string) {
+    this.importProgress.delete(progressId);
+  }
+
+  // 带进度跟踪的批量导入
+  async importTablesWithProgress(connectionId: string, tableNames: string[]): Promise<{progressId: string}> {
+    const progressId = `import_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // 初始化进度
+    this.importProgress.set(progressId, {
+      total: tableNames.length,
+      completed: 0,
+      failed: 0,
+      status: 'running',
+      details: tableNames.map(tableName => ({
+        tableName,
+        status: 'pending'
+      }))
+    });
+
+    // 异步执行导入
+    this.executeImportWithProgress(connectionId, tableNames, progressId).catch(error => {
+      this.logger.error('[mysql-connector] Import with progress failed', { error, progressId });
+      const progress = this.importProgress.get(progressId);
+      if (progress) {
+        progress.status = 'failed';
+        this.importProgress.set(progressId, progress);
+      }
+    });
+
+    return { progressId };
+  }
+
+  private async executeImportWithProgress(connectionId: string, tableNames: string[], progressId: string) {
+    const progress = this.importProgress.get(progressId);
+    if (!progress) return;
+
+    for (let i = 0; i < tableNames.length; i++) {
+      const tableName = tableNames[i];
+      
+      try {
+        // 更新当前表为处理中
+        progress.details[i].status = 'pending';
+        this.importProgress.set(progressId, { ...progress });
+
+        // 执行导入
+        const collectionName = `mysql_${tableName}`;
+        await this.importTable(connectionId, tableName, collectionName);
+        
+        // 更新成功状态
+        progress.details[i].status = 'success';
+        progress.completed++;
+        
+      } catch (error) {
+        this.logger.error(`[mysql-connector] Failed to import table ${tableName}`, { error });
+        
+        // 更新失败状态
+        progress.details[i].status = 'failed';
+        progress.details[i].error = error.message;
+        progress.failed++;
+      }
+      
+      // 更新进度
+      this.importProgress.set(progressId, { ...progress });
+    }
+    
+    // 标记完成
+    progress.status = 'completed';
+    this.importProgress.set(progressId, { ...progress });
+    
+    this.logger.info(`[mysql-connector] Import completed`, {
+      progressId,
+      total: progress.total,
+      completed: progress.completed,
+      failed: progress.failed
+    });
+  }
+
+  // 错误恢复：重新连接
+  async reconnectConnection(connectionId: string): Promise<boolean> {
+    this.logger.info(`[mysql-connector] Attempting to reconnect connection ${connectionId}`);
+    
+    try {
+      const connectionInfo = this.connections.get(connectionId);
+      if (!connectionInfo) {
+        throw new Error('连接信息不存在');
+      }
+      
+      // 关闭现有连接
+      if (connectionInfo.connection) {
+        try {
+          const connection = connectionInfo.connection as any;
+          if (connection.end) {
+            await connection.end();
+          } else if (connection.destroy) {
+            connection.destroy();
+          }
+        } catch (error) {
+          this.logger.warn('[mysql-connector] Error closing existing connection during reconnect:', error);
+        }
+      }
+      
+      // 创建新连接
+      const pool = mysql.createPool({
+        host: connectionInfo.host,
+        port: connectionInfo.port,
+        user: connectionInfo.username,
+        password: connectionInfo.password,
+        database: connectionInfo.database,
+        connectionLimit: 10,
+        acquireTimeout: 60000,
+        queueLimit: 0
+      });
+
+      // 测试新连接
+      const testConnection = await pool.getConnection();
+      await testConnection.ping();
+      testConnection.release();
+      
+      // 更新连接信息
+      connectionInfo.connection = pool;
+      connectionInfo.lastUsed = Date.now();
+      this.connections.set(connectionId, connectionInfo);
+      
+      this.logger.info(`[mysql-connector] Successfully reconnected connection ${connectionId}`);
+      return true;
+      
+    } catch (error) {
+      this.logger.error(`[mysql-connector] Failed to reconnect connection ${connectionId}`, { error });
+      return false;
+    }
+  }
+
+  // 重试导入功能
+  async retryFailedImports(progressId: string, connectionId: string): Promise<void> {
+    const progress = this.importProgress.get(progressId);
+    if (!progress) {
+      throw new Error('进度信息不存在');
+    }
+
+    const failedTables = progress.details
+      .filter(detail => detail.status === 'failed')
+      .map(detail => detail.tableName);
+
+    if (failedTables.length === 0) {
+      throw new Error('没有失败的导入任务需要重试');
+    }
+
+    this.logger.info(`[mysql-connector] Retrying ${failedTables.length} failed imports for progress ${progressId}`);
+    
+    // 重置失败项的状态
+    progress.details.forEach(detail => {
+      if (detail.status === 'failed') {
+        detail.status = 'pending';
+        detail.error = undefined;
+      }
+    });
+    
+    progress.status = 'running';
+    progress.failed = 0;
+    this.importProgress.set(progressId, { ...progress });
+
+    // 重新执行失败的导入
+    await this.executeImportWithProgress(connectionId, failedTables, progressId);
   }
 }
